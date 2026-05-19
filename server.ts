@@ -3430,8 +3430,10 @@ async function startServer() {
       const attachment_url = req.file ? `/uploads/${req.file.filename}` : null;
       const attachment_type = req.file ? req.file.mimetype : null;
       
-      // Validation for Dedication
-      let isoDedicationTime = dedication_time;
+      // Validation for Dedication. Coerce empty string to null so Postgres doesn't
+      // throw 22007 (DateTimeParseError) on non-Dedication cases that send "".
+      // See RAILWAY_LOG_ANALYSIS.md N-1.
+      let isoDedicationTime: string | null = dedication_time || null;
       if (case_type === 'Dedication' && dedication_time) {
         const dTime = new Date(dedication_time);
         isoDedicationTime = dTime.toISOString();
