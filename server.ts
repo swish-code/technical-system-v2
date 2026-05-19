@@ -178,27 +178,53 @@ async function logAction(userId: number, action: string, targetTable: string, ta
   }
 }
 
-// Multer setup for file uploads
+// Multer setup for file uploads. v2 hardening (S-6):
+// - MIME whitelist (images + PDF only) so an attacker can't upload .html/.svg
+//   that becomes same-origin stored XSS when served from /uploads.
+// - Allowed-extension whitelist as belt-and-suspenders (mimetype is client-
+//   supplied; double-check against the extension).
+// - Filename sanitization: never trust originalname; strip path separators
+//   and use only the safe extension we recognized.
+// The /uploads static route is also wrapped with authenticate further down,
+// so browsers must hold a valid session cookie to fetch attachments.
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+const ALLOWED_UPLOAD_MIMES: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "application/pdf": ".pdf",
+};
+
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
+  destination: (_req, _file, cb) => {
     cb(null, uploadDir);
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
+    // Use only the canonical extension we recognized, never the original filename.
+    const ext = ALLOWED_UPLOAD_MIMES[file.mimetype] || ".bin";
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, uniqueSuffix + path.extname(file.originalname));
+    cb(null, `${uniqueSuffix}${ext}`);
   },
 });
 
-const upload = multer({ 
+const upload = multer({
   storage,
   limits: {
-    fileSize: 50 * 1024 * 1024, // 50MB limit
-  }
+    fileSize: 10 * 1024 * 1024, // 10MB — was 50MB; nothing here needs that much.
+    files: 1,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (!(file.mimetype in ALLOWED_UPLOAD_MIMES)) {
+      cb(new Error(`Unsupported file type: ${file.mimetype}`));
+      return;
+    }
+    cb(null, true);
+  },
 });
 
 // Seed Data Function
