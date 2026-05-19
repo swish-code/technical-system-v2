@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import { createServer as createViteServer } from "vite";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -3792,8 +3793,20 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Login rate limit: 5 attempts per 15 minutes per IP. Counts only failed attempts
+  // (skipSuccessfulRequests) so a legitimate user typing wrong password 5 times
+  // doesn't lock themselves out for the rest of the day after one successful login.
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 5,
+    skipSuccessfulRequests: true,
+    standardHeaders: "draft-7",
+    legacyHeaders: false,
+    message: { error: "Too many login attempts. Try again in 15 minutes." },
+  });
+
   // Auth Routes
-  app.post("/api/login", async (req, res) => {
+  app.post("/api/login", loginLimiter, async (req, res) => {
     const { username, password } = req.body;
     // Note: do NOT log usernames here. Auth events should go to audit_logs only.
     try {
