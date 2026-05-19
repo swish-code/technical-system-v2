@@ -580,37 +580,7 @@ export default function Dashboard() {
               )}
             </AnimatePresence>
 
-            {(user?.role_name === 'Manager' || user?.role_name === 'Super Visor') && (
-              <button
-                onClick={async () => {
-                  try {
-                    await fetch(`${API_URL}/late-orders`, {
-                      method: 'POST',
-                      headers: { 
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${localStorage.getItem('token')}`
-                      },
-                      body: JSON.stringify({
-                        brand_id: user.brand_id || 1,
-                        branch_id: user.branch_id || 1,
-                        customer_name: "Test Customer",
-                        customer_phone: "12345678",
-                        order_id: "TEST-" + Math.floor(Math.random() * 1000),
-                        platform: "Test",
-                        call_center_message: "This is a test notification",
-                        case_type: "Late Order"
-                      })
-                    });
-                  } catch (e) {}
-                }}
-                className="hidden md:flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 hover:bg-brand/10 hover:text-brand text-zinc-600 dark:text-zinc-400 rounded-xl text-xs font-bold transition-all"
-              >
-                <Bell size={14} />
-                {lang === 'en' ? 'Test Notification' : 'تجربة الإشعار'}
-              </button>
-            )}
-
-            <button 
+            <button
               onClick={handleManualSubscribe}
               className={cn(
                 "p-2.5 rounded-2xl transition-all hover:scale-110 active:scale-90 group border relative",
