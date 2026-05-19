@@ -1,0 +1,23 @@
+{
+  "name": "Swish Menu",
+  "short_name": "Swish",
+  "description": "Swish Menu Management System",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "https://img.icons8.com/3d-fluency/192/monitor.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "https://img.icons8.com/3d-fluency/512/monitor.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

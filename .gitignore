@@ -1,0 +1,35 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+
+# Environment files
+.env
+.env.*
+.env.local
+!.env.example
+
+# Local databases / WAL files (legacy from v1's SQLite phase)
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Runtime uploads (should be backed by a mounted volume, not in the repo)
+uploads/
+
+# Audit artefacts
+.audit/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.vscode/
+.idea/
+
+# Logs
+*.log
+npm-debug.log*

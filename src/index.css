@@ -1,0 +1,81 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --color-brand: #009664;
+  --color-brand-dark: #007a52;
+  --color-brand-light: #00b377;
+}
+
+@layer base {
+  body {
+    @apply transition-colors duration-300 font-sans antialiased bg-zinc-50 text-zinc-900 dark:bg-zinc-950 dark:text-zinc-100;
+  }
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .glass-card {
+    @apply bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border border-white/20 dark:border-zinc-800/50 shadow-xl shadow-black/5;
+  }
+  
+  .btn-primary {
+    @apply bg-brand text-white px-6 py-3 rounded-2xl font-bold shadow-lg shadow-brand/20 hover:bg-brand-dark transition-all active:scale-[0.98] disabled:opacity-70;
+  }
+
+  .input-field {
+    @apply w-full px-4 py-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800 border-2 border-transparent focus:bg-white dark:focus:bg-zinc-900 focus:border-brand outline-none transition-all font-medium;
+  }
+
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-300 dark:bg-zinc-700 rounded-full hover:bg-zinc-400 dark:hover:bg-zinc-600;
+}
+
+/* Animations */
+@keyframes flash-highlight {
+  0% { 
+    box-shadow: 0 0 0 0 rgba(0, 150, 100, 0);
+    background-color: transparent;
+  }
+  20% { 
+    box-shadow: 0 0 0 4px rgba(0, 150, 100, 0.4);
+    background-color: rgba(0, 150, 100, 0.1);
+  }
+  100% { 
+    box-shadow: 0 0 0 0 rgba(0, 150, 100, 0);
+    background-color: transparent;
+  }
+}
+
+.animate-flash {
+  animation: flash-highlight 2s ease-out forwards;
+}
+
+.text-gradient {
+  @apply bg-clip-text text-transparent bg-gradient-to-r from-brand to-brand-light;
+}
