@@ -2515,8 +2515,35 @@ async function startServer() {
   // and prod (express.static of dist/). If you ever serve the API to a different
   // origin, add cors({ origin: process.env.FRONTEND_ORIGIN }) — never cors() bare.
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server });
+  // S-5: WebSocket auth at handshake. Verify the JWT from the auth cookie
+  // before letting any upgrade complete. Anonymous connections are dropped
+  // with 401 — v1 accepted every connection and broadcast operational events
+  // to everyone on the network.
+  const wss = new WebSocketServer({ noServer: true });
   const PORT = 3000;
+
+  server.on("upgrade", (req, socket, head) => {
+    const cookieHeader = req.headers.cookie || "";
+    const match = cookieHeader.match(/(?:^|;\s*)swish_token=([^;]+)/);
+    const token = match ? decodeURIComponent(match[1]) : null;
+
+    if (!token) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as any;
+      wss.handleUpgrade(req, socket, head, (ws) => {
+        (ws as unknown as { user: any }).user = decoded;
+        wss.emit("connection", ws, req);
+      });
+    } catch (_err) {
+      socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+      socket.destroy();
+    }
+  });
 
   app.use(express.json());
   app.use(cookieParser());
@@ -2619,12 +2646,24 @@ async function startServer() {
     res.send("<h1>Server is running!</h1><p>If you see this, the server is listening on port 3000.</p>");
   });
 
-  // WebSocket broadcast helper
+  // WebSocket broadcast helper. S-15: filter delivery by role_target / user_id
+  // so events with PII (DEDICATION_ALERT customer_name, etc.) only reach the
+  // intended audience. Un-tagged events go to all authenticated clients.
   const broadcast = (data: any) => {
-    wss.clients.forEach(client => {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(JSON.stringify(data));
-      }
+    const roleTarget: string[] | null = Array.isArray(data.role_target) ? data.role_target : null;
+    const targetUserId: number | null =
+      typeof data.user_id === "number" ? data.user_id :
+      typeof data?.data?.call_center_user_id === "number" ? data.data.call_center_user_id : null;
+
+    wss.clients.forEach((client) => {
+      if (client.readyState !== WebSocket.OPEN) return;
+      const u = (client as unknown as { user?: { id?: number; role_name?: string } }).user;
+      if (!u) return; // shouldn't happen post-S-5 but defensive
+
+      if (roleTarget && !roleTarget.includes(u.role_name || "")) return;
+      if (targetUserId !== null && u.id !== targetUserId) return;
+
+      client.send(JSON.stringify(data));
     });
 
     // Trigger push notifications for new pending requests
@@ -3236,8 +3275,12 @@ async function startServer() {
         
         const dTime = new Date(alert.dedication_time);
         if (dTime <= now) {
+          // PII delivery: customer_name is in the payload, so target only the
+          // originating Call Center user and the Restaurants role for that
+          // branch. The browser-side filter narrows further to the actual user.
           broadcast({
             type: "DEDICATION_ALERT",
+            role_target: ["Call Center", "Restaurants"],
             data: {
               id: alert.id,
               order_id: alert.order_id,
