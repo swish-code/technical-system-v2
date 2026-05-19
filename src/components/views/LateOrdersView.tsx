@@ -308,7 +308,7 @@ export default function LateOrdersView() {
   };
 
   useEffect(() => {
-    if (isTechnicalBackOffice && !form.case_type) {
+    if (isTechnicalBackOffice && form.case_type !== 'Technical') {
       setForm(prev => ({ ...prev, case_type: 'Technical' }));
     }
   }, [isTechnicalBackOffice, form.case_type]);
@@ -621,16 +621,23 @@ export default function LateOrdersView() {
               <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase ml-1">{t.caseType}</label>
               <select
                 required
-                className="w-full px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none transition-all font-medium text-sm text-zinc-900 dark:text-white"
+                disabled={isTechnicalBackOffice}
+                className="w-full px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none transition-all font-medium text-sm text-zinc-900 dark:text-white disabled:opacity-70"
                 value={form.case_type}
                 onChange={(e) => setForm({ ...form, case_type: e.target.value, dedication_time: '', technical_type: '' })}
               >
-                <option value="">Select Case</option>
-                {caseTypes.map(c => (
-                  <option key={c.id} value={lang === 'en' ? c.name_en : c.name_ar}>
-                    {lang === 'en' ? c.name_en : c.name_ar}
-                  </option>
-                ))}
+                {isTechnicalBackOffice ? (
+                  <option value="Technical">{lang === 'en' ? 'Technical' : 'تقني'}</option>
+                ) : (
+                  <>
+                    <option value="">Select Case</option>
+                    {caseTypes.map(c => (
+                      <option key={c.id} value={lang === 'en' ? c.name_en : c.name_ar}>
+                        {lang === 'en' ? c.name_en : c.name_ar}
+                      </option>
+                    ))}
+                  </>
+                )}
               </select>
             </div>
             {form.case_type === 'Technical' && (
