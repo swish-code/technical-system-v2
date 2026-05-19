@@ -3868,7 +3868,7 @@ async function startServer() {
         branch_ids: branchIds
       };
       
-      const token = jwt.sign(userData, JWT_SECRET);
+      const token = jwt.sign(userData, JWT_SECRET, { expiresIn: "8h", algorithm: "HS256" });
       res.json({ token, user: userData });
     } catch (error: any) {
       console.error(`[LOGIN] Error during login for ${username}:`, error);
