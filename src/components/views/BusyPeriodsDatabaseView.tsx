@@ -160,9 +160,8 @@ export default function BusyPeriodsDatabaseView() {
 
   const handleExport = async () => {
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_URL}/busy-periods/export`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include',
       });
       
       if (res.ok) {

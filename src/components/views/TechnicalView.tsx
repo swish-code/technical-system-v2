@@ -138,11 +138,10 @@ export default function TechnicalView() {
 
   const executeDelete = async () => {
     if (confirmModal.productId === null) return;
-    const token = localStorage.getItem('token');
     try {
       const res = await fetch(`${API_URL}/products/${confirmModal.productId}`, {
         method: 'DELETE',
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include',
       });
       if (res.ok) {
         fetchData(currentPage);

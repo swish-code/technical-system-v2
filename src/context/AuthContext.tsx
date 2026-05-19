@@ -1,10 +1,10 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { User } from '../types';
-import { getUser, removeAuthToken, removeUser } from '../lib/utils';
+import { API_URL, getUser, removeUser } from '../lib/utils';
 
 interface AuthContextType {
   user: User | null;
-  login: (user: User, token: string) => void;
+  login: (user: User) => void;
   logout: () => void;
   lang: 'en' | 'ar';
   setLang: (lang: 'en' | 'ar') => void;
@@ -16,14 +16,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUserState] = useState<User | null>(getUser());
   const [lang, setLang] = useState<'en' | 'ar'>('en');
 
-  const login = (user: User, token: string) => {
-    localStorage.setItem('token', token);
+  // v2: JWT lives in an httpOnly cookie set by /api/login. We only keep user
+  // metadata in localStorage for UI rehydration on reload. See S-13/S-14.
+  const login = (user: User) => {
     localStorage.setItem('user', JSON.stringify(user));
     setUserState(user);
   };
 
   const logout = () => {
-    removeAuthToken();
+    // Best-effort: tell the server to clear the cookie. Don't await — the UI
+    // can switch back to the login screen immediately.
+    fetch(`${API_URL}/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     removeUser();
     setUserState(null);
   };

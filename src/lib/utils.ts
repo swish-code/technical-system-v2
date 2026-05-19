@@ -7,9 +7,9 @@ export function cn(...inputs: ClassValue[]) {
 
 export const API_URL = "/api";
 
-export const getAuthToken = () => localStorage.getItem("token");
-export const setAuthToken = (token: string) => localStorage.setItem("token", token);
-export const removeAuthToken = () => localStorage.removeItem("token");
+// v2: auth is via httpOnly cookie set by /api/login. No token in localStorage,
+// no Authorization header from the browser. Use `credentials: "include"` on
+// every fetch instead. See S-13/S-14.
 
 export const getUser = () => {
   try {

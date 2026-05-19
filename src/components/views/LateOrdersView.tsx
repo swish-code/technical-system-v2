@@ -384,12 +384,9 @@ export default function LateOrdersView() {
 
   const handleView = async (id: number) => {
     try {
-      const token = localStorage.getItem('token');
       await fetch(`${API_URL}/late-orders/${id}/view`, {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`
-        }
+        credentials: 'include',
       });
     } catch (error) {
       console.error('Error tracking view:', error);

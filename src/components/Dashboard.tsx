@@ -71,7 +71,7 @@ export default function Dashboard() {
     if (!["Technical Back Office", "Technical Team", "Manager", "Super Visor", "Operation Manager"].includes(user?.role_name || "")) return;
     try {
       const res = await fetch(`${API_URL}/busy-periods/active-alarms`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        credentials: 'include'
       });
       if (res.ok) {
         const data = await res.json();
@@ -85,7 +85,7 @@ export default function Dashboard() {
     try {
       const res = await fetch(`${API_URL}/busy-periods/${id}/dismiss-alarm`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        credentials: 'include'
       });
       if (res.ok) {
         setTimerAlarms(prev => prev.filter(a => a.id !== id));
@@ -148,7 +148,7 @@ export default function Dashboard() {
   const fetchUnreadCounts = async () => {
     try {
       const res = await fetch(`${API_URL}/unread-counts`, {
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        credentials: 'include'
       });
       if (res.ok) {
         const data = await res.json();
@@ -161,7 +161,7 @@ export default function Dashboard() {
     try {
       await fetch(`${API_URL}/mark-viewed/${type}`, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${localStorage.getItem('token')}` }
+        credentials: 'include'
       });
       setUnreadCounts(prev => ({ ...prev, [type]: 0 }));
     } catch (e) {}

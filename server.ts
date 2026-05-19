@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import rateLimit from "express-rate-limit";
+import cookieParser from "cookie-parser";
 import { createServer as createViteServer } from "vite";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -2518,6 +2519,19 @@ async function startServer() {
   const PORT = 3000;
 
   app.use(express.json());
+  app.use(cookieParser());
+
+  // Cookie options shared by /api/login (set) and /api/logout (clear).
+  const AUTH_COOKIE_NAME = "swish_token";
+  const AUTH_COOKIE_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8h, matches JWT expiresIn.
+  const isProd = process.env.NODE_ENV === "production";
+  const authCookieOptions = {
+    httpOnly: true,
+    secure: isProd,         // Set-Cookie is only sent over HTTPS in prod.
+    sameSite: "lax" as const, // Lax keeps the cookie on top-level navigations from external sites; strict would also work.
+    maxAge: AUTH_COOKIE_MAX_AGE_MS,
+    path: "/",
+  };
 
   // Request logger — path only, no query string (which can contain search terms,
   // filter values, and other request data). For body-level audit, use audit_logs.
@@ -2672,8 +2686,13 @@ async function startServer() {
   };
 
   // Middleware: Auth
+  // Reads the JWT from the httpOnly cookie set by /api/login. Falls back to
+  // an Authorization: Bearer header so legacy clients / API integrations still
+  // work, but the browser app no longer uses the header path.
   const authenticate = async (req: any, res: any, next: any) => {
-    const token = req.headers.authorization?.split(" ")[1];
+    const token: string | undefined =
+      req.cookies?.[AUTH_COOKIE_NAME] ||
+      req.headers.authorization?.split(" ")[1];
     if (!token) return res.status(401).json({ error: "Unauthorized" });
     try {
       const decoded = jwt.verify(token, JWT_SECRET) as any;
@@ -3875,7 +3894,10 @@ async function startServer() {
       };
       
       const token = jwt.sign(userData, JWT_SECRET, { expiresIn: "8h", algorithm: "HS256" });
-      res.json({ token, user: userData });
+      // Set the JWT as an httpOnly cookie. Token is NOT echoed in the response
+      // body, so XSS can't read it from localStorage like in v1 (S-13/S-14).
+      res.cookie(AUTH_COOKIE_NAME, token, authCookieOptions);
+      res.json({ user: userData });
     } catch (error: any) {
       console.error(`Login error:`, error?.code || error?.message || "unknown");
       if (error.code === 'EAI_AGAIN' || error.message?.includes('getaddrinfo')) {
@@ -3886,6 +3908,13 @@ async function startServer() {
       }
       res.status(500).json({ error: "Internal server error" });
     }
+  });
+
+  // Logout — clear the auth cookie. Doesn't require auth itself so an expired
+  // session can still log out cleanly.
+  app.post("/api/logout", (_req, res) => {
+    res.clearCookie(AUTH_COOKIE_NAME, { ...authCookieOptions, maxAge: undefined });
+    res.json({ success: true });
   });
 
   // Brands Routes
@@ -6206,7 +6235,10 @@ async function startServer() {
     });
   });
 
-  app.use("/uploads", express.static(path.join(__dirname, "uploads")));
+  // Authenticated /uploads. Browsers send the swish_token cookie on <img>
+  // and <a download> requests automatically (same-origin), so the existing
+  // attachment_url paths in the frontend keep working.
+  app.use("/uploads", authenticate, express.static(path.join(__dirname, "uploads")));
   
   if (process.env.NODE_ENV !== "production") {
     console.log("Development mode: Starting Vite middleware...");

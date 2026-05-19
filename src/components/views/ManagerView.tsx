@@ -120,13 +120,13 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
 
   const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem('token');
     const url = editingUser ? `${API_URL}/users/${editingUser.id}` : `${API_URL}/users`;
     const method = editingUser ? 'PUT' : 'POST';
-    
+
     const res = await fetch(url, {
       method,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(formData),
     });
     if (res.ok) {
@@ -138,10 +138,10 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
 
   const handleCreateBrand = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem('token');
     const res = await fetch(`${API_URL}/brands`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(formData),
     });
     if (res.ok) {
@@ -153,13 +153,13 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
 
   const handleSaveField = async (e: React.FormEvent) => {
     e.preventDefault();
-    const token = localStorage.getItem('token');
     const url = editingField ? `${API_URL}/fields/${editingField.id}` : `${API_URL}/fields`;
     const method = editingField ? 'PUT' : 'POST';
-    
+
     const res = await fetch(url, {
       method,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...formData, type: formData.type || 'text' }),
     });
     if (res.ok) {
@@ -177,10 +177,9 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
         ? 'Are you sure you want to delete this field? This will remove all associated data.' 
         : 'هل أنت متأكد أنك تريد حذف هذا الحقل؟ سيؤدي ذلك إلى إزالة جميع البيانات المرتبطة.',
       onConfirm: async () => {
-        const token = localStorage.getItem('token');
         const res = await fetch(`${API_URL}/fields/${fieldId}`, {
           method: 'DELETE',
-          headers: { Authorization: `Bearer ${token}` },
+          credentials: 'include',
         });
         if (res.ok) {
           fetchData();
@@ -197,10 +196,10 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
   const handleAddOption = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedField) return;
-    const token = localStorage.getItem('token');
     const res = await fetch(`${API_URL}/fields/${selectedField.id}/options`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...newOption, price: parseFloat(newOption.price) }),
     });
     if (res.ok) {
@@ -557,10 +556,10 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
             
             <form onSubmit={async (e) => {
               e.preventDefault();
-              const token = localStorage.getItem('token');
               const res = await fetch(`${API_URL}/branches`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ brand_id: formData.brand_id, name: formData.branch_name }),
               });
               if (res.ok) {
@@ -611,10 +610,9 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
                     <span className="font-bold text-zinc-900 dark:text-white">{b.name}</span>
                   </div>
                   <button onClick={async () => {
-                    const token = localStorage.getItem('token');
                     const res = await fetch(`${API_URL}/branches/${b.id}`, {
                       method: 'DELETE',
-                      headers: { Authorization: `Bearer ${token}` },
+                      credentials: 'include',
                     });
                     if (res.ok) fetchData();
                   }} className="p-2 text-zinc-300 dark:text-zinc-600 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-xl transition-all opacity-0 group-hover:opacity-100">
@@ -638,10 +636,10 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
             </div>
             <form onSubmit={async (e) => {
               e.preventDefault();
-              const token = localStorage.getItem('token');
               const res = await fetch(`${API_URL}/busy-reasons`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: formData.reason_name }),
               });
               if (res.ok) {
@@ -670,10 +668,9 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
                 >
                   <span className="font-bold text-zinc-900 dark:text-white">{r.name}</span>
                   <button onClick={async () => {
-                    const token = localStorage.getItem('token');
                     const res = await fetch(`${API_URL}/busy-reasons/${r.id}`, {
                       method: 'DELETE',
-                      headers: { Authorization: `Bearer ${token}` },
+                      credentials: 'include',
                     });
                     if (res.ok) fetchData();
                   }} className="p-2 text-zinc-300 dark:text-zinc-600 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100">
@@ -697,10 +694,10 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
             </div>
             <form onSubmit={async (e) => {
               e.preventDefault();
-              const token = localStorage.getItem('token');
               const res = await fetch(`${API_URL}/busy-responsible`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                credentials: 'include',
+                headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ name: formData.resp_name }),
               });
               if (res.ok) {
@@ -729,10 +726,9 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
                 >
                   <span className="font-bold text-zinc-900 dark:text-white">{r.name}</span>
                   <button onClick={async () => {
-                    const token = localStorage.getItem('token');
                     const res = await fetch(`${API_URL}/busy-responsible/${r.id}`, {
                       method: 'DELETE',
-                      headers: { Authorization: `Bearer ${token}` },
+                      credentials: 'include',
                     });
                     if (res.ok) fetchData();
                   }} className="text-zinc-400 dark:text-zinc-500 hover:text-red-500 transition-all opacity-0 group-hover:opacity-100">

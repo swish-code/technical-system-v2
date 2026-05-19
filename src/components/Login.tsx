@@ -18,10 +18,11 @@ export default function Login() {
     try {
       const res = await fetch(`${API_URL}/login`, {
         method: 'POST',
+        credentials: 'include', // accept the httpOnly auth cookie the server sets
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ username, password }),
       });
-      
+
       let data;
       const contentType = res.headers.get("content-type");
       if (contentType && contentType.includes("application/json")) {
@@ -33,7 +34,7 @@ export default function Login() {
       }
 
       if (res.ok) {
-        login(data.user, data.token);
+        login(data.user);
       } else {
         setError(data.error || 'Login failed');
       }

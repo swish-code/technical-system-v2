@@ -195,10 +195,10 @@ export default function HideItemView() {
     }
     setSubmitting(true);
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_URL}/hidden-items`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brand_id: Number(selectedBrand),
           branch_id: selectedBranch === 'all' ? null : Number(selectedBranch),
@@ -244,10 +244,10 @@ export default function HideItemView() {
 
   const handleUnhide = async (id: number) => {
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_URL}/hidden-items/bulk-unhide`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ids: [id] })
       });
       if (res.ok) {

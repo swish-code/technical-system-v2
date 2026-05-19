@@ -242,9 +242,8 @@ export default function UnhideItemView() {
 
   const handleExport = async () => {
     try {
-      const token = localStorage.getItem('token');
       const res = await fetch(`${API_URL}/hidden-items/export`, {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include',
       });
       if (res.ok) {
         const blob = await res.blob();

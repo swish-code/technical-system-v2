@@ -1,4 +1,4 @@
-import { API_URL, getAuthToken } from "./utils";
+import { API_URL } from "./utils";
 
 export type PushSubscriptionStatus = "unsupported" | "denied" | "subscribed" | "error";
 
@@ -49,15 +49,10 @@ export async function subscribeToPush(): Promise<PushSubscriptionStatus> {
       });
     }
 
-    const token = getAuthToken();
-    if (!token) return "error";
-
     const saveRes = await fetch(`${API_URL}/notifications/subscribe`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token}`,
-      },
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify(subscription),
     });
 
