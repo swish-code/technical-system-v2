@@ -1,6 +1,5 @@
 import "dotenv/config";
 import express from "express";
-import cors from "cors";
 import { createServer as createViteServer } from "vite";
 import http from "http";
 import { WebSocketServer, WebSocket } from "ws";
@@ -2520,7 +2519,9 @@ async function startServer() {
   console.log("Starting server...");
   
   const app = express();
-  app.use(cors());
+  // No CORS middleware: frontend is served same-origin in dev (Vite middleware)
+  // and prod (express.static of dist/). If you ever serve the API to a different
+  // origin, add cors({ origin: process.env.FRONTEND_ORIGIN }) — never cors() bare.
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server });
   const PORT = 3000;
