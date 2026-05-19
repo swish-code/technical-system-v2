@@ -2492,11 +2492,17 @@ async function startServer() {
 
   app.use(express.json());
 
-  // Request logger
+  // Request logger — path only, no query string (which can contain search terms,
+  // filter values, and other request data). For body-level audit, use audit_logs.
   app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url}`);
+    console.log(`${req.method} ${req.path}`);
     next();
   });
+
+  // Suppress 404 noise from PWA/iOS asset probes that the app doesn't serve.
+  app.get(["/favicon.ico", "/apple-touch-icon.png", "/apple-touch-icon-precomposed.png",
+          "/apple-touch-icon-120x120.png", "/apple-touch-icon-120x120-precomposed.png",
+          "/.well-known/assetlinks.json"], (_req, res) => res.status(204).end());
 
   // Initialize Database in background to avoid blocking server startup
   (async () => {
@@ -3789,31 +3795,27 @@ async function startServer() {
   // Auth Routes
   app.post("/api/login", async (req, res) => {
     const { username, password } = req.body;
-    console.log(`[LOGIN] Attempt for user: ${username}`);
+    // Note: do NOT log usernames here. Auth events should go to audit_logs only.
     try {
       const user = await db.get(`
-        SELECT u.*, r.name as role_name, b.name as brand_name, br.name as branch_name 
-        FROM users u 
-        JOIN roles r ON u.role_id = r.id 
+        SELECT u.*, r.name as role_name, b.name as brand_name, br.name as branch_name
+        FROM users u
+        JOIN roles r ON u.role_id = r.id
         LEFT JOIN brands b ON u.brand_id = b.id
         LEFT JOIN branches br ON u.branch_id = br.id
         WHERE u.username = $1 AND u.is_active = 1
       `, [username]) as any;
-      
+
       if (!user) {
-        console.log(`[LOGIN] User not found: ${username}`);
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
-      console.log(`[LOGIN] User found, comparing password for: ${username}`);
       const isMatch = await bcrypt.compare(password, user.password_hash);
-      
+
       if (!isMatch) {
-        console.log(`[LOGIN] Password mismatch for: ${username}`);
         return res.status(401).json({ error: "Invalid credentials" });
       }
 
-      console.log(`[LOGIN] Success for: ${username}`);
       const userBrands = await db.all("SELECT brand_id FROM user_brands WHERE user_id = $1", [user.id]) as any[];
       const brandIds = userBrands.map(ub => ub.brand_id);
 
@@ -3836,7 +3838,7 @@ async function startServer() {
       const token = jwt.sign(userData, JWT_SECRET, { expiresIn: "8h", algorithm: "HS256" });
       res.json({ token, user: userData });
     } catch (error: any) {
-      console.error(`[LOGIN] Error during login for ${username}:`, error);
+      console.error(`Login error:`, error?.code || error?.message || "unknown");
       if (error.code === 'EAI_AGAIN' || error.message?.includes('getaddrinfo')) {
         return res.status(500).json({ 
           error: "Database connection error. If you are using Railway, ensure you use the PUBLIC connection string (proxy.railway.app) instead of the INTERNAL one (postgres.railway.internal).",
