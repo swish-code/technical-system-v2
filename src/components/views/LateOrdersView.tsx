@@ -6,6 +6,7 @@ import { Brand, Branch, LateOrderRequest, CallCenterFormField, CallCenterFieldOp
 import * as XLSX from 'xlsx';
 
 import { useFetch } from '../../hooks/useFetch';
+import { playNotificationBeep } from '../../lib/audio';
 
 export default function LateOrdersView() {
   const { lang, user } = useAuth();
@@ -520,8 +521,7 @@ export default function LateOrdersView() {
           <button
             onClick={() => {
               try {
-                const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-                audio.play();
+                playNotificationBeep();
                 alert(lang === 'en' ? "Sound test triggered!" : "تم تشغيل اختبار الصوت!");
               } catch (e) {
                 alert("Error playing sound: " + e);

@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import { useWebSocket } from '../hooks/useWebSocket';
 import { AppNotification } from '../types';
 import { cn } from '../lib/utils';
+import { playNotificationBeep } from '../lib/audio';
 
 export default function NotificationManager() {
   const { user, lang } = useAuth();
@@ -12,13 +13,7 @@ export default function NotificationManager() {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   const playSound = useCallback(() => {
-    try {
-      const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-      audio.volume = 0.5;
-      audio.play();
-    } catch (e) {
-      console.warn('Audio playback failed:', e);
-    }
+    playNotificationBeep();
   }, []);
 
   useEffect(() => {

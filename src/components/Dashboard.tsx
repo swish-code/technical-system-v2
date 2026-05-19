@@ -49,6 +49,7 @@ import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert } from 'lucide-r
 import { useWebSocket } from '../hooks/useWebSocket';
 import NotificationManager from './NotificationManager';
 import { subscribeToPush } from '../lib/notificationHelper';
+import { createLoopingAlarm, playNotificationBeep } from '../lib/audio';
 
 export default function Dashboard() {
   const { user, logout, lang, setLang } = useAuth();
@@ -63,7 +64,7 @@ export default function Dashboard() {
     if (typeof window === 'undefined' || !('Notification' in window)) return 'unsupported';
     return Notification.permission === 'default' ? 'prompt' : (Notification.permission as any);
   });
-  const alarmRef = useRef<HTMLAudioElement | null>(null);
+  const alarmRef = useRef<ReturnType<typeof createLoopingAlarm> | null>(null);
   const lastMessage = useWebSocket();
 
   const fetchActiveAlarms = async () => {
@@ -132,21 +133,15 @@ export default function Dashboard() {
   };
 
   const stopAlarm = () => {
-    if (alarmRef.current) {
-      alarmRef.current.pause();
-      alarmRef.current.currentTime = 0;
-    }
+    alarmRef.current?.stop();
     setIsAlarmPlaying(false);
   };
 
   const playAlarm = () => {
     if (!alarmRef.current) {
-      alarmRef.current = new Audio('https://assets.mixkit.co/active_storage/sfx/1110/1110-preview.mp3');
-      alarmRef.current.loop = true;
+      alarmRef.current = createLoopingAlarm();
     }
-    alarmRef.current.play().catch(e => {
-      console.log("Audio play failed - user interaction needed", e);
-    });
+    alarmRef.current.start();
     setIsAlarmPlaying(true);
   };
 
@@ -213,11 +208,7 @@ export default function Dashboard() {
 
       if (isRelevant) {
         setActiveAlert(alertData);
-        // Play sound if possible
-        try {
-          const audio = new Audio('https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3');
-          audio.play();
-        } catch (e) {}
+        playNotificationBeep();
       }
     }
   }, [lastMessage, user]);
@@ -596,13 +587,6 @@ export default function Dashboard() {
               )}
             </button>
 
-            <div className="hidden sm:flex -space-x-2">
-              {[1, 2, 3].map((i) => (
-                <div key={i} className="w-8 h-8 lg:w-10 lg:h-10 rounded-full border-2 border-white dark:border-zinc-900 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center overflow-hidden">
-                  <img src={`https://picsum.photos/seed/user${i}/100/100`} alt="User" referrerPolicy="no-referrer" />
-                </div>
-              ))}
-            </div>
           </div>
         </header>
 
