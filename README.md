@@ -51,6 +51,28 @@ This initial commit makes the following deltas from `swish-code/Technical_System
 
 - **No hardcoded secret fallbacks.** `JWT_SECRET`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` now fail-fast via a `requireEnv()` helper instead of silently falling back to literals in source. **v2 will refuse to start if any of these three variables is missing — this is intentional, not a bug; the previous silent fallback meant production was signing tokens with a public string from the source code.** [S-1, S-3]
 - **`seedData()` no longer deletes unknown brands.** The previous version ran `DELETE FROM products/branches/brands` on every restart for any brand not in `ALLOWED_BRANDS`. Now logs a warning and preserves the data; merge logic for known variations is unchanged. [S-8]
+- **JWTs now expire after 8h** (`expiresIn: "8h"` on `jwt.sign`). v1 issued tokens that never expired. [S-2]
+- **No hardcoded default-password user seeds.** v1 created `admin/admin123`, `Super Visor/supervisor123`, and `marketing_team/marketing123` on every startup, then force-reset admin's role to Manager. All four blocks are removed. First-time bootstrap is now a one-shot SQL operation; see *First-time bootstrap* below. [S-4]
+- **No `GEMINI_API_KEY` in the frontend bundle.** Removed the `vite.config.ts` `define` that substituted the key at build time. If you wire up Gemini later, do it backend-only and proxy via an API route. [S-7]
+- **No wide-open CORS.** Removed `app.use(cors())`. The frontend is served same-origin in both dev (Vite middleware) and prod (`express.static(dist/)`), so CORS isn't needed at all. If a cross-origin setup is required later, add `cors({ origin: <whitelist> })` explicitly. [S-11]
+- **"Test Notification" button removed** from the Dashboard. It POSTed real `late_order_requests` rows with `customer_name: "Test Customer"` and also generated 403 noise because Manager wasn't in the route's `authorize()` list. [S-16, N-3]
+- **`POST /api/late-orders` no longer crashes on empty `dedication_time`.** Coerces `""` to `null` before insert. [N-1]
+
+## First-time bootstrap
+
+Because v2 doesn't auto-seed any users, a fresh database needs at least one operator account created manually. Run this once against your Postgres:
+
+```sql
+-- 1. Make sure roles exist (server.ts seeds these on first startup; run after the server has booted once)
+SELECT id, name FROM roles;
+
+-- 2. Create the first admin. Replace <BCRYPT_HASH> with the output of:
+--    node -e "console.log(require('bcryptjs').hashSync(process.argv[1], 10))" '<your_chosen_password>'
+INSERT INTO users (username, password_hash, role_id)
+SELECT 'admin', '<BCRYPT_HASH>', id FROM roles WHERE name = 'Manager';
+```
+
+For migrations from v1, the database is cloned wholesale and this step is unnecessary — all 137 v1 users come over intact.
 
 ## Known open issues (not yet addressed in this commit)
 

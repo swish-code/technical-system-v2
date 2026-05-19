@@ -293,21 +293,8 @@ async function seedData() {
     await db.query("INSERT INTO roles (name) VALUES ($1) ON CONFLICT (name) DO NOTHING", [role]);
   }
 
-  // Create default admin if no users exist
-  const userCount = await db.get("SELECT COUNT(*) as count FROM users");
-  if (Number(userCount.count) === 0) {
-    const adminRole = await db.get("SELECT id FROM roles WHERE name = $1", ["Technical Back Office"]);
-    const passwordHash = await bcrypt.hash("admin123", 10);
-    if (adminRole) {
-      await db.query(
-        "INSERT INTO users (username, password_hash, role_id) VALUES ($1, $2, $3)",
-        ["admin", passwordHash, adminRole.id]
-      );
-      console.log("Default admin user created: admin / admin123");
-    } else {
-      console.error("CRITICAL: Technical Back Office role not found. Cannot create admin user.");
-    }
-  }
+  // v2: no hardcoded admin seed. Bootstrap a first admin via one-shot SQL when
+  // starting from an empty DB. See README "First-time bootstrap".
 
   const bbtBrand = await db.get("SELECT id FROM brands WHERE UPPER(name) = $1", ["BBT"]);
   const chiliBrand = await db.get("SELECT id FROM brands WHERE UPPER(name) = $1", ["CHILI"]);
@@ -848,17 +835,7 @@ try {
     }
   }
 
-  // Seed Super Visor User
-  const superVisorRole = await db.get("SELECT id FROM roles WHERE name = $1", ["Super Visor"]) as { id: number };
-  if (superVisorRole) {
-    const username = 'Super Visor';
-    const userExists = await db.get("SELECT id FROM users WHERE username = $1", [username]);
-    if (!userExists) {
-      const hashedPassword = bcrypt.hashSync("supervisor123", 10);
-      await db.query("INSERT INTO users (username, password_hash, role_id) VALUES ($1, $2, $3)", [username, hashedPassword, superVisorRole.id]);
-      console.log(`Created user ${username} with role Super Visor`);
-    }
-  }
+  // v2: removed hardcoded "Super Visor" / "supervisor123" seed. Create via bootstrap SQL.
 
   // Remove unwanted marketing roles and reassign users
   const marketingTeamRole = await db.get("SELECT id FROM roles WHERE name = $1", ["Marketing Team"]) as { id: number };
@@ -882,41 +859,28 @@ try {
     }
   }
 
-  const managerRole = await db.get("SELECT id FROM roles WHERE name = $1", ["Manager"]) as { id: number };
-  const adminUser = await db.get("SELECT id FROM users WHERE username = $1", ["admin"]) as { id: number } | undefined;
-
-  if (!adminUser && managerRole) {
-    const hashedPassword = bcrypt.hashSync("admin123", 10);
-    await db.query("INSERT INTO users (username, password_hash, role_id) VALUES ($1, $2, $3)", ["admin", hashedPassword, managerRole.id]);
-    console.log("Admin user created with Manager role");
-  } else if (adminUser && managerRole) {
-    // Ensure admin has Manager role
-    await db.query("UPDATE users SET role_id = $1 WHERE username = $2", [managerRole.id, "admin"]);
-    console.log("Admin user role verified/updated to Manager");
-  }
+  // v2: removed second hardcoded "admin" / "admin123" seed AND the force-reset of
+  // admin's role on every startup. Both were anti-patterns. Roles are now managed
+  // through the UI and persist across restarts.
+  const managerRole = await db.get("SELECT id FROM roles WHERE name = $1", ["Manager"]) as { id: number } | undefined;
 
   // Migration: Merge 'bbt' and 'BBT' brands - REMOVED redundant logic as it's now handled in seedData()
   
   // Seed Brands if empty - REMOVED redundant logic as it's now handled in seedData()
 
-  // Seed Marketing User
+  // v2: removed hardcoded "marketing_team" / "marketing123" seed. Create via bootstrap SQL.
+  // The brand assignments below run for ANY existing marketing_team user, idempotently.
   if (marketingTeamRole) {
-    const username = 'marketing_team';
-    const userExists = await db.get("SELECT id FROM users WHERE username = $1", [username]);
-    if (!userExists) {
-      const hashedPassword = bcrypt.hashSync("marketing123", 10);
-      const result = await db.query("INSERT INTO users (username, password_hash, role_id) VALUES ($1, $2, $3) RETURNING id", [username, hashedPassword, marketingTeamRole.id]);
-      const userId = result.rows[0].id;
-      
-      // Assign some brands to marketing team by default
+    const marketingUser = await db.get("SELECT id FROM users WHERE username = $1", ['marketing_team']) as { id: number } | undefined;
+    if (marketingUser) {
       const brandsToAssign = ["YELO PIZZA", "MISHMASH", "TABLE"];
       for (const brandName of brandsToAssign) {
         const brand = await db.get("SELECT id FROM brands WHERE name = $1", [brandName]) as { id: number };
         if (brand) {
-          await db.query("INSERT INTO user_brands (user_id, brand_id) VALUES ($1, $2)", [userId, brand.id]);
+          await db.query("INSERT INTO user_brands (user_id, brand_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", [marketingUser.id, brand.id]);
         }
       }
-      console.log(`Created user ${username} with role Marketing Team and assigned brands`);
+      console.log(`marketing_team user found; ensured brand assignments`);
     }
   }
 
