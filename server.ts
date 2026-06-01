@@ -2993,40 +2993,43 @@ async function startServer() {
             message_ar: `تمت الموافقة على طلب إخفاء/إظهار`,
           });
         } else if (data.branch_id === null) {
-          const branches = await db.all("SELECT id FROM branches WHERE brand_id = $1", [data.brand_id]) as { id: number }[];
+          const branches = await db.all("SELECT id, name FROM branches WHERE brand_id = $1", [data.brand_id]) as { id: number, name: string }[];
           const productNameFieldId = await getProductNameFieldId();
           const brand = await db.get("SELECT name FROM brands WHERE id = $1", [data.brand_id]) as { name: string };
-          
+
           for (const productId of data.product_ids) {
             const product = await db.get(`
-              SELECT fv.value as name 
-              FROM product_field_values fv 
+              SELECT fv.value as name
+              FROM product_field_values fv
               WHERE fv.product_id = $1 AND fv.field_id = $2
             `, [productId, productNameFieldId]) as { name: string };
 
             for (const branch of branches) {
               await db.query(`
                 INSERT INTO hidden_items (
-                  user_id, brand_id, branch_id, product_id, agent_name, reason, 
+                  user_id, brand_id, branch_id, product_id, agent_name, reason,
                   action_to_unhide, comment, requested_at, responsible_party
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
               `, [request.user_id, data.brand_id, branch.id, productId, data.agent_name, data.reason, data.action_to_unhide, data.comment, data.requested_at, data.responsible_party]);
-              
+
               await db.query(`
                 INSERT INTO hide_history (
                   user_id, brand_id, branch_id, product_id, action,
                   agent_name, reason, action_to_unhide, comment, requested_at, responsible_party
                 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
               `, [request.user_id, data.brand_id, branch.id, productId, 'HIDE', data.agent_name, data.reason, data.action_to_unhide, data.comment, data.requested_at, data.responsible_party]);
-            }
 
-            await logAction(request.user_id, "HIDE", "products", productId, {
-              product_name: product?.name || 'Unknown Product',
-              brand_name: brand?.name || 'Unknown Brand',
-              branch: 'All Branches',
-              brand_id: data.brand_id,
-              reason: data.reason
-            }, null);
+              // Log one HIDE per branch (matching the direct hide path) so each
+              // branch's later UNHIDE pairs with it by exact product+branch key.
+              await logAction(request.user_id, "HIDE", "products", productId, {
+                product_name: product?.name || 'Unknown Product',
+                brand_name: brand?.name || 'Unknown Brand',
+                branch: branch.name,
+                brand_id: data.brand_id,
+                branch_id: branch.id,
+                reason: data.reason
+              }, null);
+            }
           }
           broadcast({
             type: "NOTIFICATION",
@@ -5298,11 +5301,13 @@ async function startServer() {
           sessions.push(session);
           activeSessions[key] = session;
         } else if (log.action === 'UNHIDE') {
+          let sessionKey = key;
           let session = activeSessions[key];
-          
+
           if (!session && branch !== 'All Branches') {
             const allBranchesKey = `${productId}-All Branches`;
             session = activeSessions[allBranchesKey];
+            if (session) sessionKey = allBranchesKey;
           }
 
           if (session) {
@@ -5314,8 +5319,10 @@ async function startServer() {
               const hideTime = new Date(hideTimeStr + (hideTimeStr.includes('Z') || hideTimeStr.includes('T') ? '' : 'Z')).getTime();
               const unhideTime = new Date(unhideTimeStr + (unhideTimeStr.includes('Z') || unhideTimeStr.includes('T') ? '' : 'Z')).getTime();
               session['Duration (Min)'] = Math.round((unhideTime - hideTime) / (1000 * 60));
-              
-              if (session.Branch === branch) {
+
+              // Retire only on an exact product+branch match; keep "All Branches"
+              // sessions active so other branches' unhides can still pair with them.
+              if (sessionKey === key) {
                 delete activeSessions[key];
               }
             } else if (session['Unhide Time'] === log.timestamp) {

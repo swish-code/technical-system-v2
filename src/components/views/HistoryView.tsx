@@ -67,12 +67,14 @@ export default function HistoryView() {
           sessions.push(session);
           activeSessions[key] = session;
         } else if (log.action === 'UNHIDE') {
+          let sessionKey = key;
           let session = activeSessions[key];
-          
+
           // Fallback: if this is a specific branch unhide, look for an "All Branches" hide for the same product
           if (!session && branch !== 'All Branches') {
             const allBranchesKey = `${productId}-All Branches`;
             session = activeSessions[allBranchesKey];
+            if (session) sessionKey = allBranchesKey;
           }
 
           if (session) {
@@ -85,9 +87,11 @@ export default function HistoryView() {
               const hideTime = new Date(session.hideLog!.timestamp).getTime();
               const unhideTime = new Date(log.timestamp).getTime();
               session.durationMinutes = Math.round((unhideTime - hideTime) / (1000 * 60));
-              
-              // If it was an exact match, we can stop tracking it as active
-              if (session.branch === branch) {
+
+              // Retire the session only if it was an exact product+branch match.
+              // An "All Branches" session must stay active so other branches'
+              // unhides can still pair with it (otherwise they become orphan rows).
+              if (sessionKey === key) {
                 delete activeSessions[key];
               }
             } else if (session.unhideLog.timestamp === log.timestamp) {
@@ -605,7 +609,7 @@ export default function HistoryView() {
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {loading ? (
                 <tr>
-                  <td colSpan={7} className="px-8 py-20 text-center">
+                  <td colSpan={8} className="px-8 py-20 text-center">
                     <div className="flex items-center justify-center gap-3 text-zinc-400">
                       <div className="w-5 h-5 border-2 border-zinc-200 border-t-zinc-900 dark:border-zinc-800 dark:border-t-white rounded-full animate-spin" />
                       <span className="text-sm font-bold uppercase tracking-widest">Loading history...</span>
@@ -614,7 +618,7 @@ export default function HistoryView() {
                 </tr>
               ) : filteredLogs.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-8 py-20 text-center">
+                  <td colSpan={8} className="px-8 py-20 text-center">
                     <p className="text-zinc-400 font-bold uppercase tracking-widest">No history records found</p>
                   </td>
                 </tr>
