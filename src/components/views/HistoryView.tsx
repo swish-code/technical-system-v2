@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, formatDate } from '../../lib/utils';
-import { History, Clock, User, Package, MapPin, Download, MessageCircle, Filter, X, Calendar as CalendarIcon, Building2, Store } from 'lucide-react';
+import { History, Clock, User, Package, MapPin, Download, MessageCircle, Filter, X, Calendar as CalendarIcon, Building2, Store, Edit2, Check, Loader2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AuditLog, Brand, Branch } from '../../types';
 
@@ -35,6 +35,62 @@ export default function HistoryView() {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [branches, setBranches] = useState<Branch[]>([]);
   const [showFilters, setShowFilters] = useState(false);
+
+  // Inline edit (admin only) — correct a wrongly recorded time/reason
+  const isAdmin = user?.role_name === 'Manager';
+  const [editingSession, setEditingSession] = useState<GroupedLog | null>(null);
+  const [editHideTime, setEditHideTime] = useState('');
+  const [editUnhideTime, setEditUnhideTime] = useState('');
+  const [editReason, setEditReason] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
+
+  // Stored timestamps are UTC; the input shows/accepts Kuwait local time (UTC+3).
+  const toKuwaitInput = (ts?: string | null) => {
+    if (!ts) return '';
+    const d = (ts.includes('T') || ts.includes('Z')) ? new Date(ts) : new Date(ts.replace(' ', 'T') + 'Z');
+    if (isNaN(d.getTime())) return '';
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kuwait', year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    }).formatToParts(d);
+    const get = (t: string) => parts.find(p => p.type === t)?.value || '';
+    let hour = get('hour'); if (hour === '24') hour = '00';
+    return `${get('year')}-${get('month')}-${get('day')}T${hour}:${get('minute')}`;
+  };
+
+  const openEdit = (session: GroupedLog) => {
+    setEditingSession(session);
+    setEditHideTime(toKuwaitInput(session.hideLog?.timestamp));
+    setEditUnhideTime(toKuwaitInput(session.unhideLog?.timestamp));
+    setEditReason(session.reason && session.reason !== 'N/A' ? session.reason : '');
+  };
+
+  const saveEdit = async () => {
+    if (!editingSession) return;
+    setSavingEdit(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/history/session`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          hideLogId: editingSession.hideLog?.id || null,
+          unhideLogId: editingSession.unhideLog?.id || null,
+          hideTime: editingSession.hideLog ? editHideTime : null,
+          unhideTime: editingSession.unhideLog ? editUnhideTime : null,
+          reason: editReason,
+        }),
+      });
+      if (res.ok) {
+        setEditingSession(null);
+        await fetchLogs();
+      }
+    } catch (err: any) {
+      if (err.isAuthError) return;
+      console.error('Failed to save history edit', err);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const groupLogs = (filteredLogs: AuditLog[]) => {
     const sortedLogs = [...filteredLogs].sort((a, b) => 
@@ -727,13 +783,24 @@ export default function HistoryView() {
                       )}
                     </td>
                     <td className="px-8 py-5 text-right">
-                      <button
-                        onClick={() => handleWhatsApp(log)}
-                        className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
-                        title="Share via WhatsApp"
-                      >
-                        <MessageCircle size={18} />
-                      </button>
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={() => handleWhatsApp(log)}
+                          className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
+                          title="Share via WhatsApp"
+                        >
+                          <MessageCircle size={18} />
+                        </button>
+                        {isAdmin && (
+                          <button
+                            onClick={() => openEdit(log)}
+                            className="p-2 text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors"
+                            title="Edit record"
+                          >
+                            <Edit2 size={18} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </motion.tr>
                 ))
@@ -742,6 +809,90 @@ export default function HistoryView() {
           </table>
         </div>
       </div>
+
+      {/* Edit Modal (admin only) */}
+      <AnimatePresence>
+        {editingSession && (
+          <div className="fixed inset-0 bg-zinc-900/40 dark:bg-black/60 backdrop-blur-sm flex items-center justify-center z-[150] p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="bg-white dark:bg-zinc-900 rounded-[2.5rem] w-full max-w-md overflow-hidden shadow-[0_40px_80px_-15px_rgba(0,0,0,0.3)] border border-transparent dark:border-zinc-800"
+            >
+              <div className="p-8 space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-2xl font-black tracking-tight text-zinc-900 dark:text-white">Edit Record</h3>
+                  <button onClick={() => setEditingSession(null)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-colors text-zinc-500 dark:text-zinc-400">
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <div className="flex items-center gap-2 text-sm">
+                  <Package size={16} className="text-zinc-400" />
+                  <span className="font-black text-zinc-900 dark:text-white">{editingSession.product_name}</span>
+                  <span className="text-[10px] font-bold text-zinc-400 uppercase">· {editingSession.branch}</span>
+                </div>
+
+                <div className="space-y-4 p-6 bg-zinc-50 dark:bg-zinc-800/50 rounded-3xl border border-zinc-100 dark:border-zinc-800">
+                  {editingSession.hideLog && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Hide Time</label>
+                      <input
+                        type="datetime-local"
+                        value={editHideTime}
+                        onChange={(e) => setEditHideTime(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  {editingSession.unhideLog && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Unhide Time</label>
+                      <input
+                        type="datetime-local"
+                        value={editUnhideTime}
+                        onChange={(e) => setEditUnhideTime(e.target.value)}
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  {editingSession.hideLog && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Primary Reason</label>
+                      <input
+                        type="text"
+                        value={editReason}
+                        onChange={(e) => setEditReason(e.target.value)}
+                        placeholder="Reason"
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  <p className="text-[10px] text-zinc-400 ml-1">Times are shown in Kuwait local time.</p>
+                </div>
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setEditingSession(null)}
+                    className="flex-1 px-6 py-3.5 rounded-2xl font-bold text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveEdit}
+                    disabled={savingEdit}
+                    className="flex-[2] bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 px-6 py-3.5 rounded-2xl font-black shadow-xl hover:bg-zinc-800 dark:hover:bg-zinc-100 transition-all flex items-center justify-center gap-2 disabled:opacity-70"
+                  >
+                    {savingEdit ? <Loader2 className="w-5 h-5 animate-spin" /> : <Check size={20} className="text-emerald-400" />}
+                    Save Changes
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
