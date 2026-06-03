@@ -179,6 +179,39 @@ async function logAction(userId: number, action: string, targetTable: string, ta
   }
 }
 
+// Best-effort: keep the hide_history (BI/reporting) table in sync when an admin
+// edits a hide/unhide session on the Operation History page. There is no direct
+// link between audit_logs and hide_history, so we update the single hide_history
+// row that is closest in time for the same product/branch/action. Guarded so a
+// failure here never breaks the main audit_logs edit.
+async function syncHideHistory(action: string, productId: any, branchId: any, oldTs: any, newTs: string | null, reason: any) {
+  if (!productId || !newTs) return;
+  try {
+    const params: any[] = [newTs, productId, action];
+    let branchClause = '';
+    if (branchId !== undefined && branchId !== null) {
+      params.push(branchId);
+      branchClause = ` AND branch_id = $${params.length}`;
+    }
+    params.push(reason ?? null);
+    const reasonIdx = params.length;
+    params.push(oldTs);
+    const oldTsIdx = params.length;
+    await db.query(`
+      UPDATE hide_history
+      SET timestamp = $1, reason = COALESCE($${reasonIdx}, reason)
+      WHERE id = (
+        SELECT id FROM hide_history
+        WHERE product_id = $2 AND action = $3${branchClause}
+        ORDER BY ABS(EXTRACT(EPOCH FROM (timestamp - $${oldTsIdx}::timestamptz)))
+        LIMIT 1
+      )
+    `, params);
+  } catch (e: any) {
+    console.error("hide_history sync skipped:", e?.message);
+  }
+}
+
 // Multer setup for file uploads. v2 hardening (S-6):
 // - MIME whitelist (images + PDF only) so an attacker can't upload .html/.svg
 //   that becomes same-origin stored XSS when served from /uploads.
@@ -4728,6 +4761,70 @@ async function startServer() {
     res.json(filteredLogs.slice(0, 200));
   });
 
+  // Edit a hide/unhide history session (Manager/admin only) to correct a
+  // wrongly recorded hide time, unhide time, or reason.
+  app.put("/api/history/session", authenticate, authorize(["Manager"]), async (req, res) => {
+    const user = (req as any).user;
+    const { hideLogId, unhideLogId, hideTime, unhideTime, reason } = req.body;
+
+    // Convert a Kuwait local datetime ("YYYY-MM-DDTHH:MM[:SS]") to a UTC ISO string.
+    const toUtc = (local: string | undefined | null) => {
+      if (!local) return null;
+      const s = String(local).trim();
+      const withSecs = s.length === 16 ? `${s}:00` : s;
+      const d = new Date(`${withSecs}+03:00`); // Kuwait is UTC+3 (no DST)
+      return isNaN(d.getTime()) ? null : d.toISOString();
+    };
+
+    const hideUtc = toUtc(hideTime);
+    const unhideUtc = toUtc(unhideTime);
+
+    try {
+      // --- HIDE row in audit_logs (what the page reads) ---
+      if (hideLogId) {
+        const hideLog = await db.get("SELECT * FROM audit_logs WHERE id = $1 AND action = 'HIDE'", [hideLogId]) as any;
+        if (hideLog) {
+          let data: any = {};
+          try { data = JSON.parse(hideLog.new_value || '{}'); } catch (e) { data = {}; }
+          if (reason !== undefined && reason !== null && reason !== '') data.reason = reason;
+          await db.query(
+            "UPDATE audit_logs SET new_value = $1, timestamp = COALESCE($2, timestamp) WHERE id = $3",
+            [JSON.stringify(data), hideUtc, hideLogId]
+          );
+          await syncHideHistory('HIDE', data.product_id ?? hideLog.target_id, data.branch_id, hideLog.timestamp, hideUtc, (reason ?? null));
+        }
+      }
+
+      // --- UNHIDE row in audit_logs ---
+      if (unhideLogId) {
+        const unhideLog = await db.get("SELECT * FROM audit_logs WHERE id = $1 AND action = 'UNHIDE'", [unhideLogId]) as any;
+        if (unhideLog) {
+          await db.query(
+            "UPDATE audit_logs SET timestamp = COALESCE($1, timestamp) WHERE id = $2",
+            [unhideUtc, unhideLogId]
+          );
+          let udata: any = {};
+          try { udata = JSON.parse(unhideLog.old_value || '{}'); } catch (e) { udata = {}; }
+          await syncHideHistory('UNHIDE', udata.product_id ?? unhideLog.target_id, udata.branch_id, unhideLog.timestamp, unhideUtc, null);
+        }
+      }
+
+      await logAction(user.id, "EDIT_HISTORY", "audit_logs", hideLogId || unhideLogId || null, null, {
+        hideLogId: hideLogId || null,
+        unhideLogId: unhideLogId || null,
+        hide_time: hideUtc,
+        unhide_time: unhideUtc,
+        reason: reason ?? null,
+      });
+
+      broadcast({ type: "HIDDEN_ITEMS_UPDATED" });
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("Failed to edit history session", err);
+      res.status(500).json({ error: "Failed to update history record" });
+    }
+  });
+
   // Busy Branch Records
   app.get("/api/busy-periods/export", authenticate, async (req, res) => {
     const restriction = await getBrandRestriction((req as any).user);
@@ -5751,11 +5848,46 @@ async function startServer() {
 
   app.put("/api/busy-periods/:id", authenticate, async (req, res) => {
     const { id } = req.params;
-    let { action, end_time, total_duration, total_duration_minutes } = req.body;
+    let { action, start_time, end_time, total_duration, total_duration_minutes } = req.body;
     const user = (req as any).user;
-    
+
     const record = await db.get("SELECT * FROM busy_period_records WHERE id = $1", [id]) as any;
     if (!record) return res.status(404).json({ error: "Record not found" });
+
+    // Manual edit by an admin/manager to correct a wrongly recorded start/end time.
+    if (req.body.manual_edit === true) {
+      if (user.role_name === 'Call Center' || user.role_name === 'Restaurants') {
+        return res.status(403).json({ error: "Not authorized to edit records" });
+      }
+      const newStart = (start_time ?? record.start_time);
+      const newEnd = (end_time ?? record.end_time) || null;
+      let dur = record.total_duration;
+      let durMin = record.total_duration_minutes;
+      if (newEnd) {
+        try {
+          const sp = String(newStart).split(':');
+          const ep = String(newEnd).split(':');
+          let diff = (parseInt(ep[0]) * 60 + parseInt(ep[1])) - (parseInt(sp[0]) * 60 + parseInt(sp[1]));
+          if (diff < 0) diff += 24 * 60; // overnight
+          dur = `${Math.floor(diff / 60)}h ${diff % 60}m`;
+          durMin = diff;
+        } catch (e) {
+          // keep existing duration if the times can't be parsed
+        }
+      }
+      await db.query(`
+        UPDATE busy_period_records
+        SET start_time = $1, end_time = $2, total_duration = $3, total_duration_minutes = $4
+        WHERE id = $5
+      `, [newStart, newEnd, dur, durMin || 0, id]);
+
+      await logAction(user.id, "BUSY_EDIT", "busy_period_records", Number(id),
+        { start_time: record.start_time, end_time: record.end_time, total_duration: record.total_duration },
+        { start_time: newStart, end_time: newEnd, total_duration: dur });
+
+      broadcast({ type: "BUSY_PERIOD_UPDATED" });
+      return res.json({ success: true });
+    }
 
     if (user.role_name === 'Restaurants' && action === 'OPEN') {
       try {

@@ -17,6 +17,7 @@ export default function BusyPeriodsDatabaseView() {
   const [statusFilter, setStatusFilter] = useState('Busy');
   const [selectedRecord, setSelectedRecord] = useState<BusyPeriodRecord | null>(null);
   const [editingRecord, setEditingRecord] = useState<BusyPeriodRecord | null>(null);
+  const [editStartTime, setEditStartTime] = useState('');
   const [editEndTime, setEditEndTime] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -131,15 +132,17 @@ export default function BusyPeriodsDatabaseView() {
     if (!editingRecord) return;
     setUpdating(true);
     
-    const { formatted, minutes } = calculateDuration(editingRecord.start_time, editEndTime);
-    
+    const { formatted, minutes } = calculateDuration(editStartTime, editEndTime);
+
     try {
       const res = await fetchWithAuth(`${API_URL}/busy-periods/${editingRecord.id}`, {
         method: 'PUT',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
+          manual_edit: true,
+          start_time: editStartTime,
           end_time: editEndTime,
           total_duration: formatted,
           total_duration_minutes: minutes
@@ -424,6 +427,7 @@ export default function BusyPeriodsDatabaseView() {
                           <button
                             onClick={() => {
                               setEditingRecord(record);
+                              setEditStartTime(record.start_time);
                               setEditEndTime(record.end_time);
                             }}
                             className="p-2.5 text-zinc-400 dark:text-zinc-600 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-all"
@@ -544,12 +548,17 @@ export default function BusyPeriodsDatabaseView() {
 
                 <div className="space-y-6">
                   <div className="p-6 bg-zinc-50 dark:bg-zinc-800/50 rounded-3xl border border-zinc-100 dark:border-zinc-800 space-y-4">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-zinc-500 dark:text-zinc-400 font-medium">Start Time</span>
-                      <span className="font-bold text-zinc-900 dark:text-white">{editingRecord.start_time}</span>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest ml-1">Start Time</label>
+                      <input
+                        type="time"
+                        className="w-full px-5 py-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white focus:ring-8 focus:ring-zinc-900/5 dark:focus:ring-white/5 outline-none transition-all font-black text-zinc-900 dark:text-white text-xl"
+                        value={editStartTime}
+                        onChange={(e) => setEditStartTime(e.target.value)}
+                      />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest ml-1">New End Time</label>
+                      <label className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest ml-1">End Time</label>
                       <input
                         type="time"
                         className="w-full px-5 py-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white focus:ring-8 focus:ring-zinc-900/5 dark:focus:ring-white/5 outline-none transition-all font-black text-zinc-900 dark:text-white text-xl"
@@ -557,6 +566,12 @@ export default function BusyPeriodsDatabaseView() {
                         onChange={(e) => setEditEndTime(e.target.value)}
                       />
                     </div>
+                    {editStartTime && editEndTime && (
+                      <div className="flex justify-between text-sm pt-2 border-t border-zinc-200 dark:border-zinc-700">
+                        <span className="text-zinc-500 dark:text-zinc-400 font-medium">New Duration</span>
+                        <span className="font-black text-zinc-900 dark:text-white">{calculateDuration(editStartTime, editEndTime).formatted}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
