@@ -821,6 +821,17 @@ try {
   // Column already exists
 }
 
+// Migration: Add is_seed_data to products if it doesn't exist.
+// Marks products inserted by the seed function so they can be distinguished
+// from user-created products. Seed products that a user deletes will NOT be
+// re-inserted on the next restart (the seed loop checks by name, not count).
+try {
+  await db.exec("ALTER TABLE products ADD COLUMN is_seed_data BOOLEAN DEFAULT FALSE");
+  console.log("Added is_seed_data column to products");
+} catch (e) {
+  // Column already exists
+}
+
   // Migration: Add total_duration_minutes to busy_period_records if it doesn't exist
   try {
     await db.exec("ALTER TABLE busy_period_records ADD COLUMN total_duration_minutes INTEGER DEFAULT 0");
@@ -2384,72 +2395,98 @@ const productSeedingData: Record<string, string[]> = {
   const admin = await db.get("SELECT id FROM users WHERE username = $1", ["admin"]);
   const adminUserId = admin?.id || 1;
 
+  // If SEED_CLEANUP_PRODUCTS=true, remove seed-data products that are no longer
+  // in the seed list (e.g. items removed from productSeedingData). This lets
+  // operators prune stale seed entries without touching user-created products.
+  // User-deleted seed products are NOT re-inserted — the loop below only inserts
+  // items that have never existed (checked by name), so a deletion is permanent.
+  const cleanupEnabled = process.env.SEED_CLEANUP_PRODUCTS === "true";
+
   console.log("Starting seedData...");
   for (const [brandName, items] of Object.entries(productSeedingData)) {
     const brand = await db.get("SELECT id FROM brands WHERE UPPER(name) = $1 OR UPPER(name) = $2", [brandName.toUpperCase(), brandName.toUpperCase().replace("YELLO", "YELO")]) as { id: number };
-    if (brand) {
-      console.log(`Checking brand: ${brandName} (ID: ${brand.id})`);
-      
-      const countResult = await db.get("SELECT COUNT(*) as count FROM products WHERE brand_id = $1", [brand.id]);
-      const currentCount = Number(countResult.count);
-      console.log(`Brand ${brandName}: current count ${currentCount}, expected ${items.length}`);
-      
-      if (currentCount >= items.length && items.length > 0) {
-        console.log(`Skipping seeding for ${brandName} as it already has ${currentCount} products.`);
-        continue;
+    if (!brand) continue;
+
+    console.log(`Checking brand: ${brandName} (ID: ${brand.id})`);
+
+    const productNameFieldId = fieldIdMap["Product Name (EN)"];
+    if (!productNameFieldId) continue;
+
+    // Build the set of product names that currently exist in the DB for this brand.
+    // We check by name (not by count) so that user-deleted products are NOT
+    // re-inserted on the next restart — only genuinely absent items are added.
+    const existingProductsResult = await db.query(`
+      SELECT p.id, pfv.value AS name, p.is_seed_data
+      FROM products p
+      JOIN product_field_values pfv ON p.id = pfv.product_id
+      WHERE p.brand_id = $1 AND pfv.field_id = $2
+    `, [brand.id, productNameFieldId]);
+
+    const existingByName = new Map<string, { id: number; is_seed_data: boolean }>(
+      existingProductsResult.rows.map((r: any) => [r.name, { id: r.id, is_seed_data: r.is_seed_data }])
+    );
+
+    // Optional cleanup: delete seed products that are no longer in the seed list.
+    if (cleanupEnabled) {
+      const seedItemSet = new Set(items);
+      for (const [existingName, meta] of existingByName.entries()) {
+        if (meta.is_seed_data && !seedItemSet.has(existingName)) {
+          console.log(`[SEED_CLEANUP] Deleting stale seed product "${existingName}" for brand ${brandName}`);
+          await db.query("DELETE FROM products WHERE id = $1", [meta.id]);
+          existingByName.delete(existingName);
+        }
       }
+    }
 
-      console.log(`Seeding missing products for brand: ${brandName}...`);
-      
-      try {
-        await db.transaction(async (client) => {
-          const productNameFieldId = fieldIdMap["Product Name (EN)"];
-          if (!productNameFieldId) return;
+    // Insert only items that have never existed (not currently in DB).
+    // If a user previously deleted a seed product, it will NOT be re-created.
+    const missingItems = items.filter(name => !existingByName.has(name));
+    if (missingItems.length === 0) {
+      console.log(`No new seed products to add for ${brandName}.`);
+      continue;
+    }
 
-          // Get existing product names for this brand to avoid duplicates
-          const existingProductsResult = await client.query(`
-            SELECT pfv.value as name
-            FROM products p
-            JOIN product_field_values pfv ON p.id = pfv.product_id
-            WHERE p.brand_id = $1 AND pfv.field_id = $2
-          `, [brand.id, productNameFieldId]);
-          
-          const existingNames = new Set(existingProductsResult.rows.map((r: any) => r.name));
+    console.log(`Seeding ${missingItems.length} new product(s) for brand: ${brandName}...`);
 
-          for (const itemName of items) {
-            if (existingNames.has(itemName)) continue;
+    try {
+      await db.transaction(async (client) => {
+        for (const itemName of missingItems) {
+          const result = await client.query(
+            "INSERT INTO products (brand_id, created_by, status, is_seed_data) VALUES ($1, $2, $3, TRUE) RETURNING id",
+            [brand.id, adminUserId || 1, 'Completed']
+          );
+          const productId = result.rows[0].id;
 
-            const result = await client.query("INSERT INTO products (brand_id, created_by, status) VALUES ($1, $2, $3) RETURNING id", [brand.id, adminUserId || 1, 'Completed']);
-            const productId = result.rows[0].id;
-            
-            const category = getCategory(itemName);
-            const description = getDescription(itemName);
-            const price = getPrice();
-            const ingredients = `Sample ingredients for ${itemName}: Flour, Water, Salt, and Secret Spices.`;
+          const category = getCategory(itemName);
+          const description = getDescription(itemName);
+          const price = getPrice();
+          const ingredients = `Sample ingredients for ${itemName}: Flour, Water, Salt, and Secret Spices.`;
 
-            const values = [
-              { name: "Category Name (EN)", val: category.en },
-              { name: "Product Name (EN)", val: itemName },
-              { name: "Description (EN)", val: description.en },
-              { name: "Price", val: price },
-              { name: "Category Name (AR)", val: category.ar },
-              { name: "Product Name (AR)", val: itemName },
-              { name: "Description (AR)", val: description.ar },
-              { name: "Ingredients", val: ingredients }
-            ];
+          const values = [
+            { name: "Category Name (EN)", val: category.en },
+            { name: "Product Name (EN)", val: itemName },
+            { name: "Description (EN)", val: description.en },
+            { name: "Price", val: price },
+            { name: "Category Name (AR)", val: category.ar },
+            { name: "Product Name (AR)", val: itemName },
+            { name: "Description (AR)", val: description.ar },
+            { name: "Ingredients", val: ingredients }
+          ];
 
-            for (const v of values) {
-              const fieldId = fieldIdMap[v.name];
-              if (fieldId) {
-                await client.query("INSERT INTO product_field_values (product_id, field_id, value) VALUES ($1, $2, $3)", [productId, fieldId, v.val]);
-              }
+          for (const v of values) {
+            const fieldId = fieldIdMap[v.name];
+            if (fieldId) {
+              await client.query(
+                "INSERT INTO product_field_values (product_id, field_id, value) VALUES ($1, $2, $3)",
+                [productId, fieldId, v.val]
+              );
             }
           }
-        });
-        console.log(`Successfully completed seeding for ${brandName}`);
-      } catch (err) {
-        console.error(`Failed to seed products for ${brandName}:`, err);
-      }
+        }
+      });
+      console.log(`Successfully seeded ${missingItems.length} product(s) for ${brandName}`);
+    } catch (err) {
+      console.error(`Failed to seed products for ${brandName}:`, err);
     }
   }
 
