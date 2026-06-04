@@ -102,6 +102,7 @@ export interface Product {
   modifierGroups?: ModifierGroup[];
   channels?: string[];
   is_offline?: boolean;
+  is_active?: boolean;
 }
 
 export interface ProductFieldValue {

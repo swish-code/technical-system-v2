@@ -821,6 +821,14 @@ try {
   // Column already exists
 }
 
+// Migration: Add is_active to products if it doesn't exist
+try {
+  await db.exec("ALTER TABLE products ADD COLUMN is_active BOOLEAN DEFAULT TRUE");
+  console.log("Added is_active column to products");
+} catch (e) {
+  // Column already exists
+}
+
   // Migration: Add total_duration_minutes to busy_period_records if it doesn't exist
   try {
     await db.exec("ALTER TABLE busy_period_records ADD COLUMN total_duration_minutes INTEGER DEFAULT 0");
@@ -2389,17 +2397,8 @@ const productSeedingData: Record<string, string[]> = {
     const brand = await db.get("SELECT id FROM brands WHERE UPPER(name) = $1 OR UPPER(name) = $2", [brandName.toUpperCase(), brandName.toUpperCase().replace("YELLO", "YELO")]) as { id: number };
     if (brand) {
       console.log(`Checking brand: ${brandName} (ID: ${brand.id})`);
-      
-      const countResult = await db.get("SELECT COUNT(*) as count FROM products WHERE brand_id = $1", [brand.id]);
-      const currentCount = Number(countResult.count);
-      console.log(`Brand ${brandName}: current count ${currentCount}, expected ${items.length}`);
-      
-      if (currentCount >= items.length && items.length > 0) {
-        console.log(`Skipping seeding for ${brandName} as it already has ${currentCount} products.`);
-        continue;
-      }
 
-      console.log(`Seeding missing products for brand: ${brandName}...`);
+      console.log(`Seeding missing products for brand: ${brandName} (name-based check)...`);
       
       try {
         await db.transaction(async (client) => {
@@ -4102,7 +4101,7 @@ async function startServer() {
 
   // Products Routes
   app.get("/api/products", authenticate, async (req, res) => {
-    const { brand_id, all, page = '1', limit = '20', search, code, days } = req.query;
+    const { brand_id, all, page = '1', limit = '20', search, code, days, include_inactive } = req.query;
     const restriction = all === 'true' ? null : await getBrandRestriction((req as any).user);
     const pageNum = parseInt(page as string) || 1;
     const limitNum = parseInt(limit as string) || 20;
@@ -4116,6 +4115,11 @@ async function startServer() {
     `;
     const params: any[] = [];
     const conditions: string[] = [];
+
+    // By default only return active products; pass include_inactive=true to see all (admin/audit views)
+    if (include_inactive !== 'true') {
+      conditions.push("(p.is_active IS NULL OR p.is_active = TRUE)");
+    }
 
     if (brand_id) {
       conditions.push("p.brand_id = $" + (params.length + 1));
@@ -4526,6 +4530,51 @@ async function startServer() {
     await db.query("DELETE FROM products WHERE id = $1", [req.params.id]);
     await db.query("DELETE FROM product_field_values WHERE product_id = $1", [req.params.id]);
     res.json({ success: true });
+  });
+
+  // Soft-delete: set is_active = FALSE so the product is hidden from dropdowns but kept for audit/history
+  app.put("/api/products/:id/deactivate", authenticate, authorize(["Marketing Team", "Technical Team", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const { id } = req.params;
+    const product = await db.get("SELECT id, brand_id, is_active FROM products WHERE id = $1", [id]) as any;
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    // Brand restriction check
+    const restriction = await getBrandRestriction((req as any).user);
+    if (restriction) {
+      const brand = await db.get("SELECT name FROM brands WHERE id = $1", [product.brand_id]) as { name: string };
+      if (restriction.type === 'include' && !restriction.brands.includes(brand.name)) {
+        return res.status(403).json({ error: "You are not authorized to deactivate products for this brand" });
+      }
+      if (restriction.type !== 'include' && restriction.brands.includes(brand.name)) {
+        return res.status(403).json({ error: "You are not authorized to deactivate products for this brand" });
+      }
+    }
+
+    await db.query("UPDATE products SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [id]);
+    await logAction((req as any).user.id, "DEACTIVATE", "products", Number(id), { is_active: true }, { is_active: false });
+    res.json({ success: true, is_active: false });
+  });
+
+  // Reactivate: set is_active = TRUE
+  app.put("/api/products/:id/reactivate", authenticate, authorize(["Marketing Team", "Technical Team", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const { id } = req.params;
+    const product = await db.get("SELECT id, brand_id, is_active FROM products WHERE id = $1", [id]) as any;
+    if (!product) return res.status(404).json({ error: "Product not found" });
+
+    const restriction = await getBrandRestriction((req as any).user);
+    if (restriction) {
+      const brand = await db.get("SELECT name FROM brands WHERE id = $1", [product.brand_id]) as { name: string };
+      if (restriction.type === 'include' && !restriction.brands.includes(brand.name)) {
+        return res.status(403).json({ error: "You are not authorized to reactivate products for this brand" });
+      }
+      if (restriction.type !== 'include' && restriction.brands.includes(brand.name)) {
+        return res.status(403).json({ error: "You are not authorized to reactivate products for this brand" });
+      }
+    }
+
+    await db.query("UPDATE products SET is_active = TRUE, updated_at = CURRENT_TIMESTAMP WHERE id = $1", [id]);
+    await logAction((req as any).user.id, "REACTIVATE", "products", Number(id), { is_active: false }, { is_active: true });
+    res.json({ success: true, is_active: true });
   });
 
   // Product Codes (Coding Team)
