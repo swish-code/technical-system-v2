@@ -306,10 +306,13 @@ export default function HideItemView() {
   };
 
   const filteredProducts = products.filter(p => {
-    const matchesSearch = p.product_name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    const matchesSearch = p.product_name.toLowerCase().includes(searchQuery.toLowerCase()) ||
                          (p.ingredients && p.ingredients.toLowerCase().includes(searchQuery.toLowerCase()));
-    
+
     return matchesSearch && !getHiddenStatus(p.id);
+  }).sort((a, b) => {
+    // Always push offline (cannot-select) products to the bottom of the list.
+    return (a.is_offline ? 1 : 0) - (b.is_offline ? 1 : 0);
   });
 
   const highlightText = (text: string, query: string) => {
