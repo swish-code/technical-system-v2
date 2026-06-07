@@ -2867,11 +2867,21 @@ async function startServer() {
     const resolveRequestData = async (r: any) => {
       const data = JSON.parse(r.data);
       if (r.type === 'hide_unhide') {
+        // Brand: prefer the request's own brand_id, else fall back to the
+        // requesting user's brand (e.g. unhide requests carry no brand_id).
         if (data.brand_id) {
           data.brand_name = brandsMap[String(data.brand_id)] || 'Unknown';
+        } else if (r.requester_brand_id) {
+          data.brand_name = brandsMap[String(r.requester_brand_id)] || data.brand_name;
         }
+        // Branch: prefer the request's own branch_id; if missing (e.g. unhide
+        // requests), show the requesting restaurant user's own branch instead of
+        // the misleading "All Branches". Only true brand-wide requests with no
+        // requester branch fall back to "All Branches".
         if (data.branch_id) {
           data.branch_name = branchesMap[String(data.branch_id)] || 'Unknown';
+        } else if (r.requester_branch_id) {
+          data.branch_name = branchesMap[String(r.requester_branch_id)] || 'All Branches';
         } else {
           data.branch_name = 'All Branches';
         }
@@ -2892,7 +2902,7 @@ async function startServer() {
     // If no pagination requested, return all (backward compatibility)
     if (!page) {
       const query = `
-        SELECT pr.*, u.username, p.username as processor_name
+        SELECT pr.*, u.username, u.brand_id AS requester_brand_id, u.branch_id AS requester_branch_id, p.username as processor_name
         FROM pending_requests pr
         JOIN users u ON pr.user_id = u.id
         LEFT JOIN users p ON pr.processed_by = p.id
