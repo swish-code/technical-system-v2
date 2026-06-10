@@ -36,6 +36,10 @@ export default function HistoryView() {
   const [branches, setBranches] = useState<Branch[]>([]);
   const [showFilters, setShowFilters] = useState(false);
 
+  // Pagination (20 sessions per page)
+  const PAGE_SIZE = 20;
+  const [currentPage, setCurrentPage] = useState(1);
+
   // Inline edit (admin only) — correct a wrongly recorded time/reason
   const isAdmin = user?.role_name === 'Manager';
   const [editingSession, setEditingSession] = useState<GroupedLog | null>(null);
@@ -348,6 +352,22 @@ export default function HistoryView() {
       totalRecords: filteredLogs.length
     };
   }, [filteredLogs]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredLogs.length / PAGE_SIZE));
+  const paginatedLogs = useMemo(
+    () => filteredLogs.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE),
+    [filteredLogs, currentPage]
+  );
+
+  // Reset to the first page whenever the filtered result set changes.
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [startDate, endDate, selectedBrand, selectedBranch, allLogs]);
+
+  // Keep the current page within bounds if the data shrinks.
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
 
   const fetchLogs = async () => {
     setLoading(true);
@@ -679,8 +699,8 @@ export default function HistoryView() {
                   </td>
                 </tr>
               ) : (
-                filteredLogs.map((log, idx) => (
-                  <motion.tr 
+                paginatedLogs.map((log, idx) => (
+                  <motion.tr
                     key={log.id}
                     initial={{ opacity: 0, y: 10 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -808,6 +828,61 @@ export default function HistoryView() {
             </tbody>
           </table>
         </div>
+
+        {!loading && filteredLogs.length > 0 && (
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4 px-8 py-6 border-t border-zinc-100 dark:border-zinc-800">
+            <p className="text-[11px] font-black text-zinc-400 uppercase tracking-widest">
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filteredLogs.length)} of {filteredLogs.length}
+            </p>
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="px-3 py-2 rounded-xl text-xs font-bold text-zinc-600 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Prev
+              </button>
+              {(() => {
+                const pages: (number | string)[] = [];
+                if (totalPages <= 7) {
+                  for (let i = 1; i <= totalPages; i++) pages.push(i);
+                } else {
+                  pages.push(1);
+                  const start = Math.max(2, currentPage - 1);
+                  const end = Math.min(totalPages - 1, currentPage + 1);
+                  if (start > 2) pages.push('...');
+                  for (let i = start; i <= end; i++) pages.push(i);
+                  if (end < totalPages - 1) pages.push('...');
+                  pages.push(totalPages);
+                }
+                return pages.map((p, i) =>
+                  typeof p === 'number' ? (
+                    <button
+                      key={i}
+                      onClick={() => setCurrentPage(p)}
+                      className={`min-w-[36px] px-3 py-2 rounded-xl text-xs font-black transition-all ${
+                        p === currentPage
+                          ? 'bg-zinc-900 dark:bg-white text-white dark:text-zinc-900'
+                          : 'text-zinc-600 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700'
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  ) : (
+                    <span key={i} className="px-1 text-zinc-400 text-xs font-black">…</span>
+                  )
+                );
+              })()}
+              <button
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="px-3 py-2 rounded-xl text-xs font-bold text-zinc-600 dark:text-zinc-300 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-all"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Edit Modal (admin only) */}
