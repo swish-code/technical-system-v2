@@ -4747,7 +4747,7 @@ async function startServer() {
       LEFT JOIN users u ON a.user_id = u.id 
       WHERE (a.action IN ('HIDE', 'UNHIDE', 'EDIT_HIDDEN_ITEM'))
         AND (a.target_table IN ('products', 'hidden_items'))
-      ORDER BY timestamp DESC LIMIT 1000
+      ORDER BY timestamp DESC
     `);
 
     let filteredLogs = logs;
@@ -4768,7 +4768,7 @@ async function startServer() {
       });
     }
 
-    res.json(filteredLogs.slice(0, 200));
+    res.json(filteredLogs);
   });
 
   // Edit a hide/unhide history session (Manager/admin only) to correct a
