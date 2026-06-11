@@ -6309,8 +6309,8 @@ async function startServer() {
 
   app.get("/api/reports/user-kpi", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period } = req.query;
-    
+    let { user_id, period, date, brand_id } = req.query as any;
+
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
       user_id = user.id.toString();
@@ -6334,20 +6334,42 @@ async function startServer() {
       params.push(user_id);
     }
     
-    if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+    // A specific date takes precedence over the period preset.
+    if (date) {
+      conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length + 1}`);
+      params.push(date);
+    } else if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
     else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
     else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
-    
+
+    // Brand filter — audit_logs has no brand column, so match the brand name
+    // stored in each action's JSON payload (products use brand_name, busy uses brand).
+    if (brand_id && brand_id !== 'all') {
+      const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+      if (brandRow?.name) {
+        const bi = params.length + 1;
+        params.push(brandRow.name);
+        conditions.push(`(
+          (CASE WHEN al.new_value ~ '^[{]' THEN al.new_value::jsonb->>'brand_name' END = $${bi})
+          OR (CASE WHEN al.new_value ~ '^[{]' THEN al.new_value::jsonb->>'brand' END = $${bi})
+          OR (CASE WHEN al.old_value ~ '^[{]' THEN al.old_value::jsonb->>'brand_name' END = $${bi})
+          OR (CASE WHEN al.old_value ~ '^[{]' THEN al.old_value::jsonb->>'brand' END = $${bi})
+        )`);
+      } else {
+        conditions.push("1 = 0");
+      }
+    }
+
     if (conditions.length > 0) query += " WHERE " + conditions.join(" AND ");
     query += " GROUP BY u.id, u.username, al.action, al.target_table ORDER BY count DESC";
-    
+
     const report = await db.all(query, params);
     res.json(report);
   });
 
   app.get("/api/reports/user-activity-details", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period } = req.query;
+    let { user_id, period, date, brand_id } = req.query as any;
 
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
@@ -6375,13 +6397,34 @@ async function startServer() {
       params.push(user_id);
     }
     
-    if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+    // A specific date takes precedence over the period preset.
+    if (date) {
+      conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length + 1}`);
+      params.push(date);
+    } else if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
     else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
     else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
-    
+
+    // Brand filter — match the brand name stored in each action's JSON payload.
+    if (brand_id && brand_id !== 'all') {
+      const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+      if (brandRow?.name) {
+        const bi = params.length + 1;
+        params.push(brandRow.name);
+        conditions.push(`(
+          (CASE WHEN al.new_value ~ '^[{]' THEN al.new_value::jsonb->>'brand_name' END = $${bi})
+          OR (CASE WHEN al.new_value ~ '^[{]' THEN al.new_value::jsonb->>'brand' END = $${bi})
+          OR (CASE WHEN al.old_value ~ '^[{]' THEN al.old_value::jsonb->>'brand_name' END = $${bi})
+          OR (CASE WHEN al.old_value ~ '^[{]' THEN al.old_value::jsonb->>'brand' END = $${bi})
+        )`);
+      } else {
+        conditions.push("1 = 0");
+      }
+    }
+
     if (conditions.length > 0) query += " WHERE " + conditions.join(" AND ");
     query += " ORDER BY al.timestamp DESC LIMIT 500";
-    
+
     const logs = await db.all(query, params);
     res.json(logs);
   });
