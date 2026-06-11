@@ -23,7 +23,8 @@ import {
   Users,
   Plus,
   Trash2,
-  Eye
+  Eye,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Brand } from '../../types';
@@ -555,7 +556,26 @@ export default function AnalyticsView() {
               <option value="month">{lang === 'ar' ? 'هذا الشهر' : 'This Month'}</option>
             </select>
           </div>
-          
+
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+            <Calendar size={16} className="text-zinc-400" />
+            <input
+              type="date"
+              className="bg-transparent border-none outline-none text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider"
+              value={filters.date}
+              onChange={(e) => setFilters({ ...filters, date: e.target.value })}
+            />
+            {filters.date && (
+              <button
+                onClick={() => setFilters({ ...filters, date: '' })}
+                className="text-zinc-400 hover:text-red-500 transition-colors"
+                title={lang === 'ar' ? 'مسح التاريخ' : 'Clear date'}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
             <Users size={16} className="text-zinc-400" />
             <select 
