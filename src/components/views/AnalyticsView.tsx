@@ -178,8 +178,8 @@ export default function AnalyticsView() {
   const [filters, setFilters] = useState({
     branch: 'all',
     brand: 'all',
-    period: 'all', // today, week, month, all
-    date: '',
+    startDate: '',
+    endDate: '',
     user: 'all'
   });
 
@@ -222,8 +222,8 @@ export default function AnalyticsView() {
     const queryParams = new URLSearchParams();
     if (filters.branch !== 'all') queryParams.append('branch_id', filters.branch);
     if (filters.brand !== 'all') queryParams.append('brand_id', filters.brand);
-    if (filters.period !== 'all') queryParams.append('period', filters.period);
-    if (filters.date) queryParams.append('date', filters.date);
+    if (filters.startDate) queryParams.append('startDate', filters.startDate);
+    if (filters.endDate) queryParams.append('endDate', filters.endDate);
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
@@ -544,32 +544,32 @@ export default function AnalyticsView() {
           </div>
 
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-            <Filter size={16} className="text-zinc-400" />
-            <select 
+            <Calendar size={16} className="text-zinc-400" />
+            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">{lang === 'ar' ? 'من' : 'From'}</span>
+            <input
+              type="date"
               className="bg-transparent border-none outline-none text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider"
-              value={filters.period}
-              onChange={(e) => setFilters({...filters, period: e.target.value})}
-            >
-              <option value="all">{lang === 'ar' ? 'كل المدة' : 'All Time'}</option>
-              <option value="today">{lang === 'ar' ? 'اليوم' : 'Today'}</option>
-              <option value="week">{lang === 'ar' ? 'هذا الأسبوع' : 'This Week'}</option>
-              <option value="month">{lang === 'ar' ? 'هذا الشهر' : 'This Month'}</option>
-            </select>
+              value={filters.startDate}
+              max={filters.endDate || undefined}
+              onChange={(e) => setFilters({ ...filters, startDate: e.target.value })}
+            />
           </div>
 
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
             <Calendar size={16} className="text-zinc-400" />
+            <span className="text-[10px] font-black text-zinc-400 uppercase tracking-wider">{lang === 'ar' ? 'إلى' : 'To'}</span>
             <input
               type="date"
               className="bg-transparent border-none outline-none text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider"
-              value={filters.date}
-              onChange={(e) => setFilters({ ...filters, date: e.target.value })}
+              value={filters.endDate}
+              min={filters.startDate || undefined}
+              onChange={(e) => setFilters({ ...filters, endDate: e.target.value })}
             />
-            {filters.date && (
+            {(filters.startDate || filters.endDate) && (
               <button
-                onClick={() => setFilters({ ...filters, date: '' })}
-                className="text-zinc-400 hover:text-red-500 transition-colors"
-                title={lang === 'ar' ? 'مسح التاريخ' : 'Clear date'}
+                onClick={() => setFilters({ ...filters, startDate: '', endDate: '' })}
+                className="text-zinc-400 hover:text-red-500 transition-colors ml-1"
+                title={lang === 'ar' ? 'مسح التاريخ' : 'Clear dates'}
               >
                 <X size={14} />
               </button>
@@ -1415,61 +1415,6 @@ export default function AnalyticsView() {
             </motion.div>
           </div>
 
-          <div className="overflow-x-auto rounded-[2rem] md:rounded-[2.5rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
-            <table className="w-full text-left border-collapse min-w-[700px]">
-              <thead>
-                <tr className="bg-zinc-50 dark:bg-zinc-800/50">
-                  <th className="px-6 md:px-10 py-6 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'الوقت (الكويت)' : 'Time (Kuwait)'}</th>
-                  <th className="px-6 md:px-10 py-6 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'المستخدم' : 'User'}</th>
-                  <th className="px-6 md:px-10 py-6 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'الإجراء' : 'Action'}</th>
-                  <th className="px-6 md:px-10 py-6 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'التفاصيل' : 'Details'}</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
-                {userActivityDetails.length > 0 ? userActivityDetails.map((log, i) => (
-                  <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition-all group">
-                    <td className="px-10 py-6">
-                      <div className="flex items-center gap-3">
-                        <Clock size={14} className="text-zinc-400" />
-                        <span className="text-xs font-black text-zinc-900 dark:text-white tabular-nums">
-                          {formatDate(log.timestamp)}
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-10 py-6">
-                      <div className="flex items-center gap-4">
-                        <div className="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-400 group-hover:bg-brand group-hover:text-white transition-all shadow-sm">
-                          <Users size={18} />
-                        </div>
-                        <span className="font-black text-zinc-900 dark:text-white tracking-tight">{log.username}</span>
-                      </div>
-                    </td>
-                    <td className="px-10 py-6">
-                      <span className={cn(
-                        "px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest",
-                        log.action === 'CREATE' || log.action === 'UNHIDE' ? "bg-emerald-50 text-emerald-600" :
-                        log.action === 'UPDATE' ? "bg-indigo-50 text-indigo-600" :
-                        log.action === 'DELETE' ? "bg-red-50 text-red-600" :
-                        log.action === 'BUSY' || log.action === 'BUSY_UPDATE' ? "bg-brand/10 text-brand" :
-                        "bg-amber-50 text-amber-600"
-                      )}>
-                        {log.action.replace('_', ' ')}
-                      </span>
-                    </td>
-                    <td className="px-10 py-6">
-                      {renderActionDetails(log)}
-                    </td>
-                  </tr>
-                )) : (
-                  <tr>
-                    <td colSpan={4} className="px-10 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
-                      No activity found for the selected filters
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
         </motion.div>
       )}
     </div>

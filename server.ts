@@ -6207,6 +6207,10 @@ async function startServer() {
       params.push(brand_id);
     }
 
+    const { startDate, endDate } = req.query as any;
+    if (startDate) { conditions.push(`(hh.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(hh.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+
     if (conditions.length > 0) {
       query += " WHERE " + conditions.join(" AND ");
     }
@@ -6262,12 +6266,17 @@ async function startServer() {
       params.push(date);
     }
 
-    if (period === 'today') {
-      conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
-    } else if (period === 'week') {
-      conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
-    } else if (period === 'month') {
-      conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    const { startDate, endDate } = req.query as any;
+    if (startDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') {
+        conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+      } else if (period === 'week') {
+        conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
+      } else if (period === 'month') {
+        conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+      }
     }
 
     if (conditions.length > 0) {
@@ -6281,16 +6290,21 @@ async function startServer() {
   });
 
   app.get("/api/reports/reasons", authenticate, async (req, res) => {
-    const { period } = req.query;
+    const { period, startDate, endDate } = req.query as any;
     let query = `SELECT reason_category as name, COUNT(*) as value FROM busy_period_records`;
-    const conditions = [];
-    if (period === 'today') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
-    else if (period === 'week') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
-    else if (period === 'month') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
-    
+    const conditions: string[] = [];
+    const params: any[] = [];
+    if (startDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+      else if (period === 'week') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
+      else if (period === 'month') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    }
+
     if (conditions.length > 0) query += " WHERE " + conditions.join(" AND ");
     query += " GROUP BY reason_category ORDER BY value DESC";
-    res.json(await db.all(query));
+    res.json(await db.all(query, params));
   });
 
   app.get("/api/reports/timeline", authenticate, async (req, res) => {
@@ -6309,7 +6323,7 @@ async function startServer() {
 
   app.get("/api/reports/user-kpi", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period, date, brand_id } = req.query as any;
+    let { user_id, period, startDate, endDate, brand_id } = req.query as any;
 
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
@@ -6334,13 +6348,14 @@ async function startServer() {
       params.push(user_id);
     }
     
-    // A specific date takes precedence over the period preset.
-    if (date) {
-      conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length + 1}`);
-      params.push(date);
-    } else if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
-    else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
-    else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    // A date range takes precedence over the period preset.
+    if (startDate) { conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+      else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
+      else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    }
 
     // Brand filter — audit_logs has no brand column, so match the brand name
     // stored in each action's JSON payload (products use brand_name, busy uses brand).
@@ -6369,7 +6384,7 @@ async function startServer() {
 
   app.get("/api/reports/user-activity-details", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period, date, brand_id } = req.query as any;
+    let { user_id, period, startDate, endDate, brand_id } = req.query as any;
 
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
@@ -6397,13 +6412,14 @@ async function startServer() {
       params.push(user_id);
     }
     
-    // A specific date takes precedence over the period preset.
-    if (date) {
-      conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length + 1}`);
-      params.push(date);
-    } else if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
-    else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
-    else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    // A date range takes precedence over the period preset.
+    if (startDate) { conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+      else if (period === 'week') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
+      else if (period === 'month') conditions.push("(al.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    }
 
     // Brand filter — match the brand name stored in each action's JSON payload.
     if (brand_id && brand_id !== 'all') {
