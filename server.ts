@@ -6344,7 +6344,7 @@ async function startServer() {
 
   app.get("/api/reports/user-kpi", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period, startDate, endDate, brand_id } = req.query as any;
+    let { user_id, period, startDate, endDate, brand_id, role } = req.query as any;
 
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
@@ -6367,6 +6367,12 @@ async function startServer() {
     if (user_id && user_id !== 'all') {
       conditions.push("al.user_id = $" + (params.length + 1));
       params.push(user_id);
+    }
+
+    // User Type (role) filter — restrict to users of the selected role.
+    if (role && role !== 'all') {
+      conditions.push("u.role_id = (SELECT id FROM roles WHERE name = $" + (params.length + 1) + " LIMIT 1)");
+      params.push(role);
     }
     
     // A date range takes precedence over the period preset.
@@ -6405,7 +6411,7 @@ async function startServer() {
 
   app.get("/api/reports/user-activity-details", authenticate, async (req, res) => {
     const user = (req as any).user;
-    let { user_id, period, startDate, endDate, brand_id } = req.query as any;
+    let { user_id, period, startDate, endDate, brand_id, role } = req.query as any;
 
     // If not manager, force user_id to current user
     if (user.role_name !== 'Manager') {
@@ -6431,6 +6437,12 @@ async function startServer() {
     if (user_id && user_id !== 'all') {
       conditions.push("al.user_id = $" + (params.length + 1));
       params.push(user_id);
+    }
+
+    // User Type (role) filter — restrict to users of the selected role.
+    if (role && role !== 'all') {
+      conditions.push("u.role_id = (SELECT id FROM roles WHERE name = $" + (params.length + 1) + " LIMIT 1)");
+      params.push(role);
     }
     
     // A date range takes precedence over the period preset.

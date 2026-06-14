@@ -180,6 +180,7 @@ export default function AnalyticsView() {
     brand: 'all',
     startDate: '',
     endDate: '',
+    userType: 'all',
     user: 'all'
   });
 
@@ -224,6 +225,7 @@ export default function AnalyticsView() {
     if (filters.brand !== 'all') queryParams.append('brand_id', filters.brand);
     if (filters.startDate) queryParams.append('startDate', filters.startDate);
     if (filters.endDate) queryParams.append('endDate', filters.endDate);
+    if (filters.userType !== 'all') queryParams.append('role', filters.userType);
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
@@ -312,6 +314,12 @@ export default function AnalyticsView() {
   useEffect(() => {
     fetchData();
   }, [filters]);
+
+  // User Type (role) filter — narrows the Users dropdown to the chosen role.
+  const userTypes = Array.from(new Set(users.map((u: any) => u.role_name).filter(Boolean))).sort();
+  const filteredUsers = filters.userType === 'all'
+    ? users
+    : users.filter((u: any) => u.role_name === filters.userType);
 
   const sortedBrands = [...brandsReport].sort((a, b) => b.total_products - a.total_products);
   const sortedHides = [...hidesReport].sort((a, b) => b.total_count - a.total_count);
@@ -577,14 +585,26 @@ export default function AnalyticsView() {
           </div>
 
           <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+            <ShieldCheck size={16} className="text-zinc-400" />
+            <select
+              className="bg-transparent border-none outline-none text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider"
+              value={filters.userType}
+              onChange={(e) => setFilters({ ...filters, userType: e.target.value, user: 'all' })}
+            >
+              <option value="all">{lang === 'ar' ? 'كل الأنواع' : 'All User Types'}</option>
+              {userTypes.map(rt => <option key={rt} value={rt}>{rt}</option>)}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
             <Users size={16} className="text-zinc-400" />
-            <select 
+            <select
               className="bg-transparent border-none outline-none text-xs font-black text-zinc-900 dark:text-white uppercase tracking-wider"
               value={filters.user}
               onChange={(e) => setFilters({...filters, user: e.target.value})}
             >
               <option value="all">{lang === 'ar' ? 'كل المستخدمين' : 'All Users'}</option>
-              {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+              {filteredUsers.map((u: any) => <option key={u.id} value={u.id}>{u.username}</option>)}
             </select>
           </div>
 
@@ -1301,7 +1321,7 @@ export default function AnalyticsView() {
                   onChange={(e) => setFilters({...filters, user: e.target.value})}
                 >
                   <option value="all">{lang === 'ar' ? 'كل المستخدمين' : 'All Users'}</option>
-                  {users.map(u => <option key={u.id} value={u.id}>{u.username}</option>)}
+                  {filteredUsers.map((u: any) => <option key={u.id} value={u.id}>{u.username}</option>)}
                 </select>
               </div>
             </div>
