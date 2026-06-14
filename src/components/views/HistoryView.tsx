@@ -50,6 +50,10 @@ export default function HistoryView() {
   const [editResponsible, setEditResponsible] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
+  // Options for the edit dropdowns (same source as the Hide form)
+  const [reasonOptions, setReasonOptions] = useState<{ id: number; value_en: string; value_ar: string }[]>([]);
+  const [responsibleParties, setResponsibleParties] = useState<{ id: number; name: string }[]>([]);
+
   // Stored timestamps are UTC; the input shows/accepts Kuwait local time (UTC+3).
   const toKuwaitInput = (ts?: string | null) => {
     if (!ts) return '';
@@ -407,6 +411,28 @@ export default function HistoryView() {
     }
   };
 
+  // Reason options (the "Primary Reason" dynamic field) + responsible parties —
+  // same sources the Hide form uses, so the edit dropdowns match.
+  const fetchEditOptions = async () => {
+    try {
+      const [fieldsRes, respRes] = await Promise.all([
+        fetchWithAuth(`${API_URL}/fields`),
+        fetchWithAuth(`${API_URL}/busy-responsible`),
+      ]);
+      if (fieldsRes.ok) {
+        const data = await fieldsRes.json();
+        const primary = (data.fields || []).find((f: any) => f.name_en === 'Primary Reason');
+        setReasonOptions(primary?.options || []);
+      }
+      if (respRes.ok) {
+        const data = await respRes.json();
+        setResponsibleParties(Array.isArray(data) ? data : []);
+      }
+    } catch (err) {
+      console.error("Failed to fetch edit options", err);
+    }
+  };
+
   const fetchBranches = async (brandId: string) => {
     if (!brandId) {
       setBranches([]);
@@ -464,6 +490,7 @@ export default function HistoryView() {
   useEffect(() => {
     fetchLogs();
     fetchBrands();
+    fetchEditOptions();
   }, []);
 
   useEffect(() => {
@@ -941,25 +968,37 @@ export default function HistoryView() {
                   {editingSession.hideLog && (
                     <div className="space-y-2">
                       <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Primary Reason</label>
-                      <input
-                        type="text"
+                      <select
                         value={editReason}
                         onChange={(e) => setEditReason(e.target.value)}
-                        placeholder="Reason"
-                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
-                      />
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white appearance-none cursor-pointer"
+                      >
+                        <option value="">Select reason…</option>
+                        {editReason && !reasonOptions.some(o => o.value_en === editReason) && (
+                          <option value={editReason}>{editReason}</option>
+                        )}
+                        {reasonOptions.map(o => (
+                          <option key={o.id} value={o.value_en}>{lang === 'en' ? o.value_en : o.value_ar}</option>
+                        ))}
+                      </select>
                     </div>
                   )}
                   {editingSession.hideLog && (
                     <div className="space-y-2">
                       <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Responsible Party</label>
-                      <input
-                        type="text"
+                      <select
                         value={editResponsible}
                         onChange={(e) => setEditResponsible(e.target.value)}
-                        placeholder="Responsible party"
-                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
-                      />
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white appearance-none cursor-pointer"
+                      >
+                        <option value="">Select responsible party…</option>
+                        {editResponsible && !responsibleParties.some(r => r.name === editResponsible) && (
+                          <option value={editResponsible}>{editResponsible}</option>
+                        )}
+                        {responsibleParties.map(r => (
+                          <option key={r.id} value={r.name}>{r.name}</option>
+                        ))}
+                      </select>
                     </div>
                   )}
                   <p className="text-[10px] text-zinc-400 ml-1">Times are shown in Kuwait local time.</p>
