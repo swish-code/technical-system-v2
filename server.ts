@@ -184,7 +184,7 @@ async function logAction(userId: number, action: string, targetTable: string, ta
 // link between audit_logs and hide_history, so we update the single hide_history
 // row that is closest in time for the same product/branch/action. Guarded so a
 // failure here never breaks the main audit_logs edit.
-async function syncHideHistory(action: string, productId: any, branchId: any, oldTs: any, newTs: string | null, reason: any) {
+async function syncHideHistory(action: string, productId: any, branchId: any, oldTs: any, newTs: string | null, reason: any, responsibleParty?: any) {
   if (!productId || !newTs) return;
   try {
     const params: any[] = [newTs, productId, action];
@@ -195,11 +195,15 @@ async function syncHideHistory(action: string, productId: any, branchId: any, ol
     }
     params.push(reason ?? null);
     const reasonIdx = params.length;
+    params.push(responsibleParty ?? null);
+    const respIdx = params.length;
     params.push(oldTs);
     const oldTsIdx = params.length;
     await db.query(`
       UPDATE hide_history
-      SET timestamp = $1, reason = COALESCE($${reasonIdx}, reason)
+      SET timestamp = $1,
+          reason = COALESCE($${reasonIdx}, reason),
+          responsible_party = COALESCE($${respIdx}, responsible_party)
       WHERE id = (
         SELECT id FROM hide_history
         WHERE product_id = $2 AND action = $3${branchClause}
@@ -3070,7 +3074,8 @@ async function startServer() {
                 branch: branch.name,
                 brand_id: data.brand_id,
                 branch_id: branch.id,
-                reason: data.reason
+                reason: data.reason,
+                responsible_party: data.responsible_party
               }, null);
             }
           }
@@ -3117,7 +3122,8 @@ async function startServer() {
               branch: branch?.name || 'Unknown Branch',
               brand_id: data.brand_id,
               branch_id: data.branch_id,
-              reason: data.reason
+              reason: data.reason,
+              responsible_party: data.responsible_party
             }, null);
           }
           broadcast({
@@ -4775,7 +4781,10 @@ async function startServer() {
   // wrongly recorded hide time, unhide time, or reason.
   app.put("/api/history/session", authenticate, authorize(["Manager"]), async (req, res) => {
     const user = (req as any).user;
-    const { hideLogId, unhideLogId, hideTime, unhideTime, reason } = req.body;
+    const { hideLogId, unhideLogId, hideTime, unhideTime, reason, responsibleParty } = req.body;
+    // Only update responsible party when a non-empty value is supplied, so that
+    // editing the time/reason never wipes an existing responsible party.
+    const rp = (typeof responsibleParty === 'string' && responsibleParty.trim()) ? responsibleParty.trim() : null;
 
     // Convert a Kuwait local datetime ("YYYY-MM-DDTHH:MM[:SS]") to a UTC ISO string.
     const toUtc = (local: string | undefined | null) => {
@@ -4797,11 +4806,20 @@ async function startServer() {
           let data: any = {};
           try { data = JSON.parse(hideLog.new_value || '{}'); } catch (e) { data = {}; }
           if (reason !== undefined && reason !== null && reason !== '') data.reason = reason;
+          if (rp) data.responsible_party = rp;
           await db.query(
             "UPDATE audit_logs SET new_value = $1, timestamp = COALESCE($2, timestamp) WHERE id = $3",
             [JSON.stringify(data), hideUtc, hideLogId]
           );
-          await syncHideHistory('HIDE', data.product_id ?? hideLog.target_id, data.branch_id, hideLog.timestamp, hideUtc, (reason ?? null));
+          await syncHideHistory('HIDE', data.product_id ?? hideLog.target_id, data.branch_id, hideLog.timestamp, hideUtc, (reason ?? null), rp);
+
+          // Update the still-hidden item too, if it exists.
+          if (rp && (data.product_id ?? hideLog.target_id)) {
+            await db.query(
+              `UPDATE hidden_items SET responsible_party = $1 WHERE product_id = $2 AND branch_id IS NOT DISTINCT FROM $3`,
+              [rp, data.product_id ?? hideLog.target_id, data.branch_id ?? null]
+            );
+          }
         }
       }
 
@@ -4815,7 +4833,7 @@ async function startServer() {
           );
           let udata: any = {};
           try { udata = JSON.parse(unhideLog.old_value || '{}'); } catch (e) { udata = {}; }
-          await syncHideHistory('UNHIDE', udata.product_id ?? unhideLog.target_id, udata.branch_id, unhideLog.timestamp, unhideUtc, null);
+          await syncHideHistory('UNHIDE', udata.product_id ?? unhideLog.target_id, udata.branch_id, unhideLog.timestamp, unhideUtc, null, rp);
         }
       }
 
@@ -4825,6 +4843,7 @@ async function startServer() {
         hide_time: hideUtc,
         unhide_time: unhideUtc,
         reason: reason ?? null,
+        responsible_party: rp,
       });
 
       broadcast({ type: "HIDDEN_ITEMS_UPDATED" });
@@ -5217,7 +5236,8 @@ async function startServer() {
                 branch: branch.name,
                 reason: reason,
                 brand_id: brand_id,
-                branch_id: branch.id
+                branch_id: branch.id,
+                responsible_party: responsible_party
               });
             }
           }
@@ -5252,7 +5272,8 @@ async function startServer() {
               branch: branch?.name || 'Unknown',
               reason: reason,
               brand_id: brand_id,
-              branch_id: branch_id
+              branch_id: branch_id,
+              responsible_party: responsible_party
             });
           }
         }
