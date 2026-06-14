@@ -13,6 +13,7 @@ interface GroupedLog {
   brand_name: string;
   branch: string;
   reason: string;
+  responsible: string;
   hideLog: AuditLog | null;
   unhideLog: AuditLog | null;
   updateLogs: AuditLog[];
@@ -46,6 +47,7 @@ export default function HistoryView() {
   const [editHideTime, setEditHideTime] = useState('');
   const [editUnhideTime, setEditUnhideTime] = useState('');
   const [editReason, setEditReason] = useState('');
+  const [editResponsible, setEditResponsible] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Stored timestamps are UTC; the input shows/accepts Kuwait local time (UTC+3).
@@ -67,6 +69,7 @@ export default function HistoryView() {
     setEditHideTime(toKuwaitInput(session.hideLog?.timestamp));
     setEditUnhideTime(toKuwaitInput(session.unhideLog?.timestamp));
     setEditReason(session.reason && session.reason !== 'N/A' ? session.reason : '');
+    setEditResponsible(session.responsible || '');
   };
 
   const saveEdit = async () => {
@@ -82,6 +85,7 @@ export default function HistoryView() {
           hideTime: editingSession.hideLog ? editHideTime : null,
           unhideTime: editingSession.unhideLog ? editUnhideTime : null,
           reason: editReason,
+          responsibleParty: editResponsible,
         }),
       });
       if (res.ok) {
@@ -118,6 +122,7 @@ export default function HistoryView() {
             brand_name: data.brand_name || 'Unknown Brand',
             branch: branch,
             reason: data.reason || 'N/A',
+            responsible: data.responsible_party || '',
             hideLog: log,
             unhideLog: null,
             updateLogs: [],
@@ -186,6 +191,7 @@ export default function HistoryView() {
               brand_name: data.brand_name || 'Unknown Brand',
               branch: branch,
               reason: data.reason || 'N/A',
+              responsible: data.responsible_party || '',
               hideLog: null,
               unhideLog: log,
               updateLogs: [],
@@ -940,6 +946,18 @@ export default function HistoryView() {
                         value={editReason}
                         onChange={(e) => setEditReason(e.target.value)}
                         placeholder="Reason"
+                        className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                      />
+                    </div>
+                  )}
+                  {editingSession.hideLog && (
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest ml-1">Responsible Party</label>
+                      <input
+                        type="text"
+                        value={editResponsible}
+                        onChange={(e) => setEditResponsible(e.target.value)}
+                        placeholder="Responsible party"
                         className="w-full px-4 py-3 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
                       />
                     </div>
