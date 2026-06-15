@@ -362,6 +362,7 @@ export default function AnalyticsView() {
   const handleDownload = () => {
     const wb = XLSX.utils.book_new();
     
+    if (activeSubTab === 'general') {
     // Summary Sheet
     const summaryData = [
       { Metric: 'Total Products', Value: brandsReport.reduce((acc, b) => acc + Number(b.total_products || 0), 0) },
@@ -383,6 +384,9 @@ export default function AnalyticsView() {
     })));
     XLSX.utils.book_append_sheet(wb, timelineWS, lang === 'ar' ? 'الخط الزمني للحوادث' : "Incident Timeline");
     
+    }
+
+    if (activeSubTab === 'hide') {
     // Brands Sheet
     const brandsWS = XLSX.utils.json_to_sheet(brandsReport.map(b => ({
       [lang === 'ar' ? 'اسم البراند' : 'Brand Name']: b.brand_name,
@@ -402,6 +406,9 @@ export default function AnalyticsView() {
     })));
     XLSX.utils.book_append_sheet(wb, hidesWS, lang === 'ar' ? 'ظهور الفروع' : "Branch Visibility");
 
+    }
+
+    if (activeSubTab === 'busy') {
     // Busy Sheet
     const busyWS = XLSX.utils.json_to_sheet(busyReport.map(b => ({
       [lang === 'ar' ? 'اسم الفرع' : 'Branch Name']: b.branch_name,
@@ -419,6 +426,9 @@ export default function AnalyticsView() {
     })));
     XLSX.utils.book_append_sheet(wb, reasonsWS, lang === 'ar' ? 'الأسباب الجذرية' : "Root Causes");
 
+    }
+
+    if (activeSubTab === 'kpi') {
     // User KPIs Sheet
     const aggregatedKpis = userKpi.reduce((acc: any, curr) => {
       if (!acc[curr.username]) {
@@ -473,9 +483,11 @@ export default function AnalyticsView() {
       [lang === 'ar' ? 'العدد' : 'Count']: a.value
     })));
     XLSX.utils.book_append_sheet(wb, actionDistWS, lang === 'ar' ? 'توزيع الإجراءات' : "Action Distribution");
+    }
 
     const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuwait' });
-    XLSX.writeFile(wb, `Swish_Menu_Full_Analytics_${dateStr}.xlsx`);
+    const tabLabel = activeSubTab.toUpperCase();
+    XLSX.writeFile(wb, `Swish_Menu_${tabLabel}_Analytics_${dateStr}.xlsx`);
   };
 
   const CustomTooltip = ({ active, payload, label }: any) => {
@@ -521,7 +533,7 @@ export default function AnalyticsView() {
             className="flex items-center gap-2 px-6 py-3 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl border border-zinc-100 dark:border-zinc-800 hover:scale-105 transition-transform"
           >
             <FileText size={16} className="text-brand" />
-            {lang === 'ar' ? 'تحميل التقرير الكامل' : 'Download Full Report'}
+            {lang === 'ar' ? `تحميل تقرير ${activeSubTab.toUpperCase()}` : `Download ${activeSubTab.toUpperCase()} Report`}
           </button>
 
           <div className="flex flex-wrap items-center gap-4 bg-white dark:bg-zinc-900 p-3 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 shadow-xl shadow-zinc-900/5">
