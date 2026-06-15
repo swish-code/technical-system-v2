@@ -6311,10 +6311,18 @@ async function startServer() {
   });
 
   app.get("/api/reports/reasons", authenticate, async (req, res) => {
-    const { period, startDate, endDate } = req.query as any;
+    const { period, startDate, endDate, brand_id, branch_id } = req.query as any;
     let query = `SELECT reason_category as name, COUNT(*) as value FROM busy_period_records`;
     const conditions: string[] = [];
     const params: any[] = [];
+    if (brand_id) {
+      const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+      if (brandRow?.name) { conditions.push(`brand = $${params.length + 1}`); params.push(brandRow.name); }
+    }
+    if (branch_id) {
+      const branchRow = await db.get("SELECT name FROM branches WHERE id = $1", [branch_id]) as any;
+      if (branchRow?.name) { conditions.push(`branch = $${params.length + 1}`); params.push(branchRow.name); }
+    }
     if (startDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
     if (endDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
     if (!startDate && !endDate) {
@@ -6329,17 +6337,35 @@ async function startServer() {
   });
 
   app.get("/api/reports/timeline", authenticate, async (req, res) => {
+    const { startDate, endDate, brand_id, branch_id } = req.query as any;
+    const dateExpr = "(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date";
+    const params: any[] = [];
+    const conditions: string[] = [];
+
+    if (startDate) { conditions.push(`${dateExpr} >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`${dateExpr} <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      conditions.push(`${dateExpr} >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'`);
+    }
+    if (brand_id) {
+      const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+      if (brandRow?.name) { conditions.push(`brand = $${params.length + 1}`); params.push(brandRow.name); }
+    }
+    if (branch_id) {
+      const branchRow = await db.get("SELECT name FROM branches WHERE id = $1", [branch_id]) as any;
+      if (branchRow?.name) { conditions.push(`branch = $${params.length + 1}`); params.push(branchRow.name); }
+    }
+
     const query = `
-      SELECT 
-        (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date as date,
+      SELECT ${dateExpr} as date,
         COUNT(*) as incidents,
         SUM(total_duration_minutes) as duration
       FROM busy_period_records
-      WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'
-      GROUP BY (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY ${dateExpr}
       ORDER BY date ASC
     `;
-    res.json(await db.all(query));
+    res.json(await db.all(query, params));
   });
 
   app.get("/api/reports/user-kpi", authenticate, async (req, res) => {
