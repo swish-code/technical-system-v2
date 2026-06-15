@@ -234,7 +234,7 @@ export default function AnalyticsView() {
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/reasons?${queryParams.toString()}`),
-        fetchWithAuth(`${API_URL}/reports/timeline`),
+        fetchWithAuth(`${API_URL}/reports/timeline?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/user-kpi?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/user-activity-details?${queryParams.toString()}`)
       ]);
