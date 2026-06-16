@@ -3667,7 +3667,8 @@ async function startServer() {
         conditions.push("1 = 0");
       }
     } else if (user.role_name === 'Technical Back Office') {
-      conditions.push("lo.case_type = 'Technical'");
+      // Technical Back Office sees all case types (not just 'Technical'),
+      // respecting any brand restriction on the account.
       if (restriction) {
         const placeholders = restriction.brands.map((_: any, i: number) => `$${params.length + i + 1}`).join(',');
         conditions.push(`b.name ${restriction.type === 'include' ? 'IN' : 'NOT IN'} (${placeholders})`);
