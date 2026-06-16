@@ -3600,7 +3600,7 @@ async function startServer() {
         message_ar: `حالة جديدة للطلب رقم #${order_id}`,
         brand_id,
         branch_id,
-        role_target: ["Restaurants", "Manager", "Super Visor", "Area Manager"]
+        role_target: ["Restaurants", "Manager", "Super Visor", "Area Manager", "Technical Back Office", "Call Center"]
       });
       broadcast({ type: "LATE_ORDER_CREATED" });
       res.json({ id: requestId });
@@ -3696,12 +3696,12 @@ async function startServer() {
       params.push(brandId);
     }
     if (startDate) {
-      conditions.push(`lo.created_at >= $${params.length + 1}`);
-      params.push(startDate + ' 00:00:00');
+      conditions.push(`(lo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`);
+      params.push(startDate);
     }
     if (endDate) {
-      conditions.push(`lo.created_at <= $${params.length + 1}`);
-      params.push(endDate + ' 23:59:59');
+      conditions.push(`(lo.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`);
+      params.push(endDate);
     }
     if (userId) {
       conditions.push(`lo.call_center_user_id = $${params.length + 1}`);
