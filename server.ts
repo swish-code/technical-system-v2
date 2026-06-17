@@ -3623,17 +3623,38 @@ async function startServer() {
         }
       }
 
-      broadcast({ 
+      // Direction-aware: a restaurant-created case alerts the office (which has no
+      // brand/branch, so DON'T scope by brand/branch or they'd be filtered out);
+      // an office-created case alerts that restaurant branch (scoped).
+      const creatorIsRestaurant = (req as any).user.role_name === 'Restaurants';
+      const newCaseRecipients = creatorIsRestaurant
+        ? ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager"]
+        : ["Restaurants", "Area Manager", "Manager", "Super Visor"];
+
+      broadcast({
         type: "NOTIFICATION",
         notificationType: "CALL_CENTER",
         title_en: "New Call Center Case",
         title_ar: "حالة كول سنتر جديدة",
         message_en: `New case for order #${order_id}`,
         message_ar: `حالة جديدة للطلب رقم #${order_id}`,
-        brand_id,
-        branch_id,
-        role_target: ["Restaurants", "Manager", "Super Visor", "Area Manager", "Technical Back Office", "Call Center"]
+        role_target: newCaseRecipients,
+        ...(creatorIsRestaurant ? {} : { brand_id, branch_id }),
+        case_id: requestId,
       });
+
+      // Desktop push too (branch-scoped for the restaurant direction).
+      const newCasePush = {
+        title: "New Call Center Case",
+        body: `New case for order #${order_id}`,
+        tag: `late-order-${requestId}`,
+        data: { type: "LATE_ORDER_MESSAGE", caseId: requestId, url: `/?case=${requestId}` },
+      };
+      if (creatorIsRestaurant) {
+        await sendPushToRoles(newCaseRecipients, newCasePush);
+      } else {
+        await sendPushToRoles(["Restaurants", "Area Manager"], newCasePush, branch_id);
+      }
       broadcast({ type: "LATE_ORDER_CREATED" });
       res.json({ id: requestId });
     } catch (error: any) {
