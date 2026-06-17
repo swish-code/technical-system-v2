@@ -1071,9 +1071,9 @@ export default function LateOrdersView() {
                           </p>
                           <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 max-w-md">
                             {request.attachment_type?.startsWith('image/') ? (
-                              <img src={`${API_URL}${request.attachment_url}`} alt="Attachment" className="w-full h-auto cursor-zoom-in" onClick={() => window.open(`${API_URL}${request.attachment_url}`, '_blank')} />
+                              <img src={request.attachment_url} alt="Attachment" className="w-full h-auto cursor-zoom-in" onClick={() => window.open(request.attachment_url, '_blank')} />
                             ) : (
-                              <video src={`${API_URL}${request.attachment_url}`} controls className="w-full h-auto" />
+                              <video src={request.attachment_url} controls className="w-full h-auto" />
                             )}
                           </div>
                         </div>
