@@ -33,8 +33,8 @@ export default function LateOrdersView() {
   const [users, setUsers] = useState<any[]>([]);
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [dynamicValues, setDynamicValues] = useState<Record<number, string>>({});
-  const [attachment, setAttachment] = useState<File | null>(null);
-  const [attachmentPreview, setAttachmentPreview] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [attachmentPreviews, setAttachmentPreviews] = useState<string[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showForm, setShowForm] = useState(false);
 
@@ -234,9 +234,7 @@ export default function LateOrdersView() {
       formData.append('dedication_time', isoDedicationTime);
       formData.append('dynamic_values', JSON.stringify(dynamicValues));
       
-      if (attachment) {
-        formData.append('attachment', attachment);
-      }
+      attachments.forEach(file => formData.append('attachments', file));
 
       const res = await fetchWithAuth(`${API_URL}/late-orders`, {
         method: 'POST',
@@ -257,8 +255,8 @@ export default function LateOrdersView() {
           dedication_time: '',
         });
         setDynamicValues({});
-        setAttachment(null);
-        setAttachmentPreview(null);
+        setAttachments([]);
+        setAttachmentPreviews([]);
         setShowForm(false);
         fetchData();
       } else {
@@ -763,20 +761,24 @@ export default function LateOrdersView() {
               </label>
               <div className="flex flex-wrap gap-4 items-start">
                 <label className="cursor-pointer flex flex-col items-center justify-center px-6 py-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800 border-2 border-dashed border-zinc-200 dark:border-zinc-700 hover:border-brand transition-all group">
-                  <input 
-                    type="file" 
-                    className="hidden" 
-                    accept="image/*,video/*"
+                  <input
+                    type="file"
+                    className="hidden"
+                    accept="image/*"
+                    multiple
                     onChange={(e) => {
-                      const file = e.target.files?.[0];
-                      if (file) {
-                        setAttachment(file);
-                        const reader = new FileReader();
-                        reader.onloadend = () => {
-                          setAttachmentPreview(reader.result as string);
-                        };
-                        reader.readAsDataURL(file);
+                      const files: File[] = e.target.files ? Array.from(e.target.files) : [];
+                      if (files.length) {
+                        setAttachments(prev => [...prev, ...files].slice(0, 6));
+                        files.slice(0, 6).forEach(file => {
+                          const reader = new FileReader();
+                          reader.onloadend = () => {
+                            setAttachmentPreviews(prev => [...prev, reader.result as string]);
+                          };
+                          reader.readAsDataURL(file);
+                        });
                       }
+                      e.target.value = '';
                     }}
                   />
                   <Paperclip className="text-zinc-400 group-hover:text-brand mb-1" size={20} />
@@ -785,28 +787,21 @@ export default function LateOrdersView() {
                   </span>
                 </label>
 
-                {attachment && (
-                  <div className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-brand/20 bg-zinc-100 dark:bg-zinc-800">
-                    {attachment.type.startsWith('image/') ? (
-                      <img src={attachmentPreview || ''} alt="Preview" className="w-full h-full object-cover" />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center text-zinc-500 pt-2">
-                        <Film size={24} />
-                        <span className="text-[8px] font-black uppercase mt-1 truncate w-full px-1 text-center">Video</span>
-                      </div>
-                    )}
-                    <button 
+                {attachments.map((file, idx) => (
+                  <div key={idx} className="relative w-24 h-24 rounded-2xl overflow-hidden border-2 border-brand/20 bg-zinc-100 dark:bg-zinc-800">
+                    <img src={attachmentPreviews[idx] || ''} alt="Preview" className="w-full h-full object-cover" />
+                    <button
                       type="button"
                       onClick={() => {
-                        setAttachment(null);
-                        setAttachmentPreview(null);
+                        setAttachments(prev => prev.filter((_, i) => i !== idx));
+                        setAttachmentPreviews(prev => prev.filter((_, i) => i !== idx));
                       }}
                       className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full shadow-lg"
                     >
                       <X size={12} />
                     </button>
                   </div>
-                )}
+                ))}
               </div>
             </div>
 
@@ -1064,17 +1059,24 @@ export default function LateOrdersView() {
                       )}
                     </div>
                     <div className="md:col-span-2 space-y-4">
-                      {request.attachment_url && (
+                      {((request as any).attachments?.length > 0 || request.attachment_url) && (
                         <div>
                           <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-1">
-                            {lang === 'en' ? 'Attachment' : 'المرفق'}
+                            {lang === 'en' ? 'Attachments' : 'المرفقات'}
                           </p>
-                          <div className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 max-w-md">
-                            {request.attachment_type?.startsWith('image/') ? (
-                              <img src={request.attachment_url} alt="Attachment" className="w-full h-auto cursor-zoom-in" onClick={() => window.open(request.attachment_url, '_blank')} />
-                            ) : (
-                              <video src={request.attachment_url} controls className="w-full h-auto" />
-                            )}
+                          <div className="flex flex-wrap gap-3">
+                            {(((request as any).attachments?.length > 0
+                              ? (request as any).attachments
+                              : [{ url: request.attachment_url, type: request.attachment_type }]
+                            ) as { url: string; type?: string }[]).map((att, i) => (
+                              <div key={i} className="rounded-2xl overflow-hidden border border-zinc-200 dark:border-zinc-800 w-40">
+                                {att.type?.startsWith('video/') ? (
+                                  <video src={att.url} controls className="w-full h-auto" />
+                                ) : (
+                                  <img src={att.url} alt="Attachment" className="w-full h-auto cursor-zoom-in" onClick={() => window.open(att.url, '_blank')} />
+                                )}
+                              </div>
+                            ))}
                           </div>
                         </div>
                       )}
