@@ -3868,8 +3868,10 @@ async function startServer() {
           message_en: `${restaurant} — ${sender}: ${preview}`,
           message_ar: `${restaurant} — ${sender}: ${preview}`,
           role_target: recipients,
-          brand_id: lo.brand_id,
-          branch_id: lo.branch_id,
+          // Only scope by brand/branch when notifying RESTAURANTS (so just that
+          // branch is alerted). Office roles (TBO/Call Center/Manager) have no
+          // brand/branch, so including these would wrongly filter them out.
+          ...(fromRestaurant ? {} : { brand_id: lo.brand_id, branch_id: lo.branch_id }),
           case_id: Number(id),
         });
 
