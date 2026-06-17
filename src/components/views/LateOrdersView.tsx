@@ -441,7 +441,8 @@ export default function LateOrdersView() {
         'Restaurant Viewed At': order.restaurant_viewed_at ? formatDate(order.restaurant_viewed_at) : 'Not Viewed',
         'Restaurant Responded At': order.restaurant_response_at ? formatDate(order.restaurant_response_at) : 'No Response',
         'Manager Viewed At': order.manager_viewed_at ? formatDate(order.manager_viewed_at) : 'Not Viewed',
-        'Manager Responded At': order.manager_responded_at ? formatDate(order.manager_responded_at) : 'No Response',
+        'Responded At': order.manager_responded_at ? formatDate(order.manager_responded_at) : 'No Response',
+        'Responded By': (order as any).responder_name || '',
         'Dedication Time': order.dedication_time ? formatDate(order.dedication_time) : ''
       }));
 
@@ -1121,7 +1122,11 @@ export default function LateOrdersView() {
                               {request.manager_responded_at && (
                                 <div className="flex items-center gap-1.5 text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">
                                   <Clock size={12} />
-                                  <span>{t.managerResponse}: {formatDate(request.manager_responded_at)}</span>
+                                  <span>
+                                    {(request as any).responder_name
+                                      ? `${lang === 'ar' ? 'رد بواسطة' : 'Responded by'} ${(request as any).responder_name}`
+                                      : t.managerResponse}: {formatDate(request.manager_responded_at)}
+                                  </span>
                                 </div>
                               )}
                             </div>

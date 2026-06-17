@@ -3302,6 +3302,10 @@ async function startServer() {
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN manager_responded_at TIMESTAMP");
   } catch (e) {}
   try {
+    // Who (which user) sent the office-side response, so the UI shows the real name.
+    await db.exec("ALTER TABLE late_order_requests ADD COLUMN responded_by INTEGER");
+  } catch (e) {}
+  try {
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN restaurant_viewed_at TIMESTAMP");
   } catch (e) {}
   try {
@@ -3654,6 +3658,7 @@ async function startServer() {
       JOIN roles r ON u.role_id = r.id
       JOIN brands b ON lo.brand_id = b.id
       JOIN branches br ON lo.branch_id = br.id
+      LEFT JOIN users ru ON lo.responded_by = ru.id
     `;
     const params: any[] = [];
     const conditions: string[] = [];
@@ -3756,7 +3761,7 @@ async function startServer() {
 
     // Get paginated data
     const dataQuery = `
-      SELECT lo.*, u.username as call_center_name, r.name as creator_role, b.name as brand_name, br.name as branch_name
+      SELECT lo.*, u.username as call_center_name, r.name as creator_role, b.name as brand_name, br.name as branch_name, ru.username as responder_name
       ${query}
       ${whereClause}
       ORDER BY lo.created_at DESC
@@ -3812,10 +3817,12 @@ async function startServer() {
 
     if (user.role_name === 'Restaurants') {
       query += ", restaurant_response_at = CURRENT_TIMESTAMP";
-    } else if (user.role_name === 'Manager' || user.role_name === 'Super Visor' || user.role_name === 'Technical Back Office') {
-      query += ", manager_responded_at = CURRENT_TIMESTAMP";
-    } else if (user.role_name === 'Call Center') {
-      query += ", manager_responded_at = CURRENT_TIMESTAMP"; // Reuse manager_responded_at for simplicity or add a new column
+    } else {
+      // Any office-side responder (Manager / Super Visor / Technical Back Office /
+      // Call Center / Operation Manager). Record WHO responded so the UI can show
+      // the actual employee name instead of a hard-coded "Manager".
+      query += ", manager_responded_at = CURRENT_TIMESTAMP, responded_by = $" + (params.length + 1);
+      params.push(user.id);
     }
 
     query += " WHERE id = $" + (params.length + 1);
