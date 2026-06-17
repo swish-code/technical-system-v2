@@ -2737,16 +2737,22 @@ async function startServer() {
     });
   };
 
-  const sendPushToRoles = async (roles: string[], payload: any) => {
+  const sendPushToRoles = async (roles: string[], payload: any, branchId?: number) => {
     try {
       const roleIds = await db.all(`SELECT id FROM roles WHERE name = ANY($1)`, [roles]);
       const ids = roleIds.map((r: any) => r.id);
+      const params: any[] = [ids];
+      let branchClause = '';
+      if (branchId) {
+        params.push(branchId);
+        branchClause = ` AND u.branch_id = $${params.length}`;
+      }
       const subs = await db.all(`
-        SELECT ps.subscription 
+        SELECT ps.subscription
         FROM push_subscriptions ps
         JOIN users u ON ps.user_id = u.id
-        WHERE u.role_id = ANY($1)
-      `, [ids]);
+        WHERE u.role_id = ANY($1)${branchClause}
+      `, params);
 
       for (const row of subs) {
         const sub = JSON.parse(row.subscription);
@@ -3815,7 +3821,8 @@ async function startServer() {
     let query = "UPDATE late_order_requests SET status = $1, restaurant_message = $2, updated_at = CURRENT_TIMESTAMP";
     const params: any[] = [status, restaurant_message];
 
-    if (user.role_name === 'Restaurants') {
+    const fromRestaurant = user.role_name === 'Restaurants';
+    if (fromRestaurant) {
       query += ", restaurant_response_at = CURRENT_TIMESTAMP";
     } else {
       // Any office-side responder (Manager / Super Visor / Technical Back Office /
@@ -3825,11 +3832,64 @@ async function startServer() {
       params.push(user.id);
     }
 
+    // Mark the case unread again so the recipient gets an unread bump + highlight.
+    query += ", viewed_at = NULL";
+
     query += " WHERE id = $" + (params.length + 1);
     params.push(id);
 
     await db.query(query, params);
-    
+
+    // Notify the OTHER party about the new message/reply.
+    try {
+      const lo = await db.get(`
+        SELECT lo.order_id, lo.brand_id, lo.branch_id, b.name AS brand_name, br.name AS branch_name
+        FROM late_order_requests lo
+        JOIN brands b ON lo.brand_id = b.id
+        JOIN branches br ON lo.branch_id = br.id
+        WHERE lo.id = $1
+      `, [id]) as any;
+
+      if (lo) {
+        const orderRef = lo.order_id ? `#${lo.order_id}` : `#${id}`;
+        const restaurant = `${lo.brand_name} · ${lo.branch_name}`;
+        const sender = fromRestaurant ? restaurant : user.username;
+        const preview = (restaurant_message || '').toString().slice(0, 80);
+        // Recipients: restaurant reply -> office; office reply -> the restaurant branch.
+        const recipients = fromRestaurant
+          ? ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager"]
+          : ["Restaurants"];
+
+        broadcast({
+          type: "NOTIFICATION",
+          notificationType: "CALL_CENTER",
+          title_en: `New message · Order ${orderRef}`,
+          title_ar: `رسالة جديدة · طلب ${orderRef}`,
+          message_en: `${restaurant} — ${sender}: ${preview}`,
+          message_ar: `${restaurant} — ${sender}: ${preview}`,
+          role_target: recipients,
+          brand_id: lo.brand_id,
+          branch_id: lo.branch_id,
+          case_id: Number(id),
+        });
+
+        const pushPayload = {
+          title: `New message · Order ${orderRef}`,
+          body: `${restaurant} — ${sender}: ${preview}`,
+          tag: `late-order-${id}`,
+          data: { type: "LATE_ORDER_MESSAGE", caseId: Number(id), url: `/?case=${id}` },
+        };
+        if (fromRestaurant) {
+          await sendPushToRoles(recipients, pushPayload);
+        } else {
+          // Only the restaurant users of this branch.
+          await sendPushToRoles(["Restaurants"], pushPayload, lo.branch_id);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to send case-message notification", e);
+    }
+
     broadcast({ type: "LATE_ORDER_UPDATED", id });
     res.json({ success: true });
   });
