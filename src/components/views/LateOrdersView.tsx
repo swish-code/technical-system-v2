@@ -7,10 +7,12 @@ import * as XLSX from 'xlsx';
 
 import { useFetch } from '../../hooks/useFetch';
 import { playNotificationBeep } from '../../lib/audio';
+import { useWebSocket } from '../../hooks/useWebSocket';
 
 export default function LateOrdersView() {
   const { lang, user } = useAuth();
   const { fetchWithAuth } = useFetch();
+  const lastMessage = useWebSocket();
   
   const isCallCenter = user?.role_name === 'Call Center';
   const isRestaurant = user?.role_name === 'Restaurants';
@@ -196,6 +198,13 @@ export default function LateOrdersView() {
   useEffect(() => {
     fetchData(page);
   }, [page]);
+
+  // Live-refresh the list when a case is created or replied to.
+  useEffect(() => {
+    if (lastMessage?.type === 'LATE_ORDER_UPDATED' || lastMessage?.type === 'LATE_ORDER_CREATED') {
+      fetchData(page);
+    }
+  }, [lastMessage]);
 
   useEffect(() => {
     if (brands.length === 1 && !form.brand_id) {
@@ -949,10 +958,13 @@ export default function LateOrdersView() {
         {filteredOrders.map((request) => {
           const isExpanded = expandedOrders.includes(request.id);
           return (
-            <div 
-              key={request.id} 
+            <div
+              key={request.id}
               className={cn(
-                "bg-white dark:bg-zinc-900 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm hover:shadow-md transition-all overflow-hidden",
+                "bg-white dark:bg-zinc-900 rounded-2xl border shadow-sm hover:shadow-md transition-all overflow-hidden",
+                !(request as any).viewed_at
+                  ? "border-brand ring-2 ring-brand/30"
+                  : "border-zinc-200 dark:border-zinc-800",
                 isExpanded ? "p-6" : "p-4"
               )}
             >

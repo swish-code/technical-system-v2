@@ -78,8 +78,16 @@ export default function NotificationManager() {
             initial={{ opacity: 0, x: 50, scale: 0.9 }}
             animate={{ opacity: 1, x: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+            onClick={() => {
+              const caseId = (notification as any).case_id;
+              if (caseId) {
+                window.dispatchEvent(new CustomEvent('open-late-order', { detail: caseId }));
+                removeNotification(notification.id);
+              }
+            }}
             className={cn(
               "pointer-events-auto bg-white dark:bg-zinc-900 rounded-2xl shadow-2xl border border-zinc-200 dark:border-zinc-800 p-4 flex gap-4 relative overflow-hidden group",
+              (notification as any).case_id ? "cursor-pointer hover:border-brand/50" : "",
               lang === 'ar' ? "flex-row-reverse text-right" : "flex-row text-left"
             )}
           >

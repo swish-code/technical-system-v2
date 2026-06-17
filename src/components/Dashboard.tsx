@@ -178,8 +178,9 @@ export default function Dashboard() {
       if (["Manager", "Super Visor", "Technical Back Office"].includes(user?.role_name || "")) {
         playAlarm();
       }
-    } else if (lastMessage?.type === 'LATE_ORDER_CREATED' || 
-        lastMessage?.type === 'PENDING_REQUEST_UPDATED' || 
+    } else if (lastMessage?.type === 'LATE_ORDER_CREATED' ||
+        lastMessage?.type === 'LATE_ORDER_UPDATED' ||
+        lastMessage?.type === 'PENDING_REQUEST_UPDATED' ||
         lastMessage?.type === 'PRODUCT_CREATED') {
       fetchUnreadCounts();
     } else if (lastMessage?.type === 'BUSY_TIMER_EXPIRED') {
@@ -286,6 +287,19 @@ export default function Dashboard() {
       markAsViewed(activeTab);
     }
   }, [activeTab, unreadCounts]);
+
+  // Clicking a case-message notification jumps to the Call Center Cases tab.
+  useEffect(() => {
+    const handler = () => setActiveTab('late_orders');
+    window.addEventListener('open-late-order', handler);
+    // Deep-link from a desktop push notification (/?case=123).
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('case')) {
+      setActiveTab('late_orders');
+      window.history.replaceState({}, '', window.location.pathname);
+    }
+    return () => window.removeEventListener('open-late-order', handler);
+  }, []);
 
   const renderView = () => {
     if (activeTab === 'products') {
