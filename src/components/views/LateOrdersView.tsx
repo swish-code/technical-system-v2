@@ -676,7 +676,6 @@ export default function LateOrdersView() {
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-zinc-500 dark:text-zinc-400 uppercase ml-1">{t.customerName}</label>
               <input
-                required
                 type="text"
                 className="w-full px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none transition-all font-medium text-sm text-zinc-900 dark:text-white"
                 value={form.customer_name}
