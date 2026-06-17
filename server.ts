@@ -225,7 +225,9 @@ async function syncHideHistory(action: string, productId: any, branchId: any, ol
 //   and use only the safe extension we recognized.
 // The /uploads static route is also wrapped with authenticate further down,
 // so browsers must hold a valid session cookie to fetch attachments.
-const uploadDir = path.join(__dirname, "uploads");
+// UPLOAD_DIR lets us point at a persistent Railway Volume (e.g. /data/uploads)
+// so attachments survive redeploys. Falls back to the local folder in dev.
+const uploadDir = process.env.UPLOAD_DIR || path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
@@ -254,7 +256,7 @@ const upload = multer({
   storage,
   limits: {
     fileSize: 10 * 1024 * 1024, // 10MB — was 50MB; nothing here needs that much.
-    files: 1,
+    files: 6,
   },
   fileFilter: (_req, file, cb) => {
     if (!(file.mimetype in ALLOWED_UPLOAD_MIMES)) {
@@ -593,6 +595,15 @@ async function initDb() {
       PRIMARY KEY (request_id, field_id),
       FOREIGN KEY (request_id) REFERENCES late_order_requests(id) ON DELETE CASCADE,
       FOREIGN KEY (field_id) REFERENCES call_center_form_fields(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS late_order_attachments (
+      id SERIAL PRIMARY KEY,
+      request_id INTEGER NOT NULL,
+      url TEXT NOT NULL,
+      type TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (request_id) REFERENCES late_order_requests(id) ON DELETE CASCADE
     );
 
     CREATE TABLE IF NOT EXISTS technical_case_types (
@@ -3535,12 +3546,15 @@ async function startServer() {
     }
   });
 
-  app.post("/api/late-orders", authenticate, authorize(["Call Center", "Restaurants", "Technical Back Office", "Operation Manager"]), upload.single('attachment'), async (req, res) => {
+  app.post("/api/late-orders", authenticate, authorize(["Call Center", "Restaurants", "Technical Back Office", "Operation Manager"]), upload.array('attachments', 6), async (req, res) => {
     try {
       const { brand_id, branch_id, customer_name, customer_phone, order_id, platform, call_center_message, case_type, technical_type, dedication_time, dynamic_values } = req.body;
       
-      const attachment_url = req.file ? `/uploads/${req.file.filename}` : null;
-      const attachment_type = req.file ? req.file.mimetype : null;
+      // Support multiple attachments. Keep attachment_url/type = the first file
+      // for backward compatibility with existing single-attachment records/code.
+      const files = (req.files as Express.Multer.File[]) || [];
+      const attachment_url = files[0] ? `/uploads/${files[0].filename}` : null;
+      const attachment_type = files[0] ? files[0].mimetype : null;
       
       // Validation for Dedication. Coerce empty string to null so Postgres doesn't
       // throw 22007 (DateTimeParseError) on non-Dedication cases that send "".
@@ -3582,6 +3596,14 @@ async function startServer() {
       ]);
       
       const requestId = result.rows[0].id;
+
+      // Store every uploaded file as its own attachment row.
+      for (const f of files) {
+        await db.query(
+          "INSERT INTO late_order_attachments (request_id, url, type) VALUES ($1, $2, $3)",
+          [requestId, `/uploads/${f.filename}`, f.mimetype]
+        );
+      }
 
       if (dynamic_values && typeof dynamic_values === 'object') {
         for (const [fieldId, value] of Object.entries(dynamic_values)) {
@@ -3752,8 +3774,22 @@ async function startServer() {
         WHERE fv.request_id IN (${placeholders})
       `, requestIds) as any[];
 
+      const attachmentRows = await db.all(`
+        SELECT request_id, url, type FROM late_order_attachments
+        WHERE request_id IN (${placeholders})
+        ORDER BY id ASC
+      `, requestIds) as any[];
+
       requests.forEach(r => {
         r.dynamic_values = fieldValues.filter(fv => fv.request_id === r.id);
+        // Unified attachments list: prefer the per-file rows; fall back to the
+        // legacy single attachment_url for older records.
+        r.attachments = attachmentRows
+          .filter(a => a.request_id === r.id)
+          .map(a => ({ url: a.url, type: a.type }));
+        if (r.attachments.length === 0 && r.attachment_url) {
+          r.attachments = [{ url: r.attachment_url, type: r.attachment_type }];
+        }
       });
     }
 
@@ -6549,7 +6585,7 @@ async function startServer() {
   // Authenticated /uploads. Browsers send the swish_token cookie on <img>
   // and <a download> requests automatically (same-origin), so the existing
   // attachment_url paths in the frontend keep working.
-  app.use("/uploads", authenticate, express.static(path.join(__dirname, "uploads")));
+  app.use("/uploads", authenticate, express.static(uploadDir));
   
   if (process.env.NODE_ENV !== "production") {
     console.log("Development mode: Starting Vite middleware...");
