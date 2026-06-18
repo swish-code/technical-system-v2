@@ -3559,6 +3559,8 @@ async function startServer() {
   app.post("/api/late-orders", authenticate, authorize(["Call Center", "Restaurants", "Technical Back Office", "Operation Manager"]), upload.array('attachments', 6), async (req, res) => {
     try {
       const { brand_id, branch_id, customer_name, customer_phone, order_id, platform, call_center_message, case_type, technical_type, dedication_time, dynamic_values } = req.body;
+      const user = (req as any).user;
+      const normalizedCaseType = user?.role_name === "Technical Back Office" ? "Technical" : (case_type || "Late Order");
       
       // Support multiple attachments. Keep attachment_url/type = the first file
       // for backward compatibility with existing single-attachment records/code.
@@ -3570,7 +3572,7 @@ async function startServer() {
       // throw 22007 (DateTimeParseError) on non-Dedication cases that send "".
       // See RAILWAY_LOG_ANALYSIS.md N-1.
       let isoDedicationTime: string | null = dedication_time || null;
-      if (case_type === 'Dedication' && dedication_time) {
+      if (normalizedCaseType === 'Dedication' && dedication_time) {
         const dTime = new Date(dedication_time);
         isoDedicationTime = dTime.toISOString();
         const now = new Date();
@@ -3597,7 +3599,7 @@ async function startServer() {
         order_id, 
         platform, 
         call_center_message, 
-        case_type || 'Late Order', 
+        normalizedCaseType, 
         technical_type, 
         isoDedicationTime, 
         getCurrentKuwaitTime(),
