@@ -45,18 +45,24 @@ export default function UserKPIView() {
   const [userActivityDetails, setUserActivityDetails] = useState<UserActivityDetail[]>([]);
   const [loading, setLoading] = useState(true);
   const [period, setPeriod] = useState('all');
+  const [teamSelf, setTeamSelf] = useState<any | null>(null);
+  const [respTarget, setRespTarget] = useState<number | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
 
     try {
-      const [kpiRes, detailsRes] = await Promise.all([
+      const [kpiRes, detailsRes, teamRes, targetRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/user-kpi?period=${period}`),
-        fetchWithAuth(`${API_URL}/reports/user-activity-details?period=${period}`)
+        fetchWithAuth(`${API_URL}/reports/user-activity-details?period=${period}`),
+        fetchWithAuth(`${API_URL}/reports/team-performance?period=${period}`),
+        fetchWithAuth(`${API_URL}/reports/team-target`)
       ]);
 
       if (kpiRes.ok) setUserKpi(await kpiRes.json());
       if (detailsRes.ok) setUserActivityDetails(await detailsRes.json());
+      if (teamRes.ok) { const rows = await teamRes.json(); setTeamSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
+      if (targetRes.ok) { const d = await targetRes.json(); setRespTarget(d?.avg_response_min ?? null); }
     } catch (error: any) {
       if (error.isAuthError) return;
       console.error("Error fetching user KPI:", error);
@@ -229,6 +235,46 @@ export default function UserKPIView() {
         animate={{ opacity: 1, y: 0 }}
         className="glass-card p-10 rounded-[3rem] border border-zinc-100 dark:border-zinc-800 shadow-2xl shadow-zinc-900/5"
       >
+        {teamSelf && (
+          <div className="mb-10 p-6 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-5">
+              <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
+                {lang === 'ar' ? 'أداء معالجة الطلبات' : 'My Request Handling'}
+              </h3>
+              {respTarget != null && (
+                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                  {lang === 'ar' ? 'الهدف' : 'Target'}: <span className="text-brand">{respTarget} min</span>
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              {[
+                { label: lang === 'ar' ? 'معالَجة' : 'Processed', value: teamSelf.processed, color: 'text-zinc-900 dark:text-white' },
+                { label: lang === 'ar' ? 'موافقة' : 'Approved', value: teamSelf.approved, color: 'text-emerald-600' },
+                { label: lang === 'ar' ? 'رفض' : 'Rejected', value: teamSelf.rejected, color: 'text-red-500' },
+                { label: lang === 'ar' ? 'متوسط الاستجابة' : 'Avg Resp (min)', value: teamSelf.avg_resp_min, target: true },
+                { label: lang === 'ar' ? 'أقصى استجابة' : 'Max Resp (min)', value: teamSelf.max_resp_min, color: 'text-zinc-900 dark:text-white' },
+              ].map((c, i) => {
+                const over = c.target && respTarget != null && c.value != null && c.value > respTarget;
+                return (
+                  <div key={i} className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800">
+                    <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}</p>
+                    <p className={cn(
+                      "text-2xl font-black tabular-nums",
+                      c.target ? (respTarget == null ? "text-zinc-900 dark:text-white" : over ? "text-red-500" : "text-emerald-600") : c.color
+                    )}>{c.value}</p>
+                    {c.target && respTarget != null && (
+                      <p className={cn("text-[9px] font-black uppercase tracking-widest mt-1", over ? "text-red-500" : "text-emerald-600")}>
+                        {over ? (lang === 'ar' ? 'فوق الهدف' : 'Over target') : (lang === 'ar' ? 'ضمن الهدف' : 'On target')}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-6 mb-10">
           {['CREATE', 'UPDATE', 'DELETE', 'HIDE', 'UNHIDE', 'BUSY'].map((action) => {
             const count = userKpi

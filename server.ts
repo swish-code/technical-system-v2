@@ -761,6 +761,13 @@ async function initDb() {
     name TEXT UNIQUE NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS performance_targets (
+    metric TEXT PRIMARY KEY,
+    value NUMERIC,
+    updated_by INTEGER,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -6629,6 +6636,92 @@ async function startServer() {
 
     const logs = await db.all(query, params);
     res.json(logs);
+  });
+
+  // Technical Team performance: how each agent processed hide/busy requests
+  // (throughput + approve/reject + response duration from pending_requests).
+  app.get("/api/reports/team-performance", authenticate, authorize(["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"]), async (req, res) => {
+    const reqUser = (req as any).user;
+    let { startDate, endDate, brand_id, branch_id, role, user_id, period } = req.query as any;
+
+    // Non-managers can only see their own row.
+    const managerRoles = ["Manager", "Super Visor", "Operation Manager"];
+    if (!managerRoles.includes(reqUser.role_name)) {
+      user_id = String(reqUser.id);
+    }
+
+    const params: any[] = [];
+    const conditions: string[] = ["pr.status <> 'Pending'", "pr.processed_by IS NOT NULL"];
+
+    // Default to Technical Back Office; the User Type filter overrides it.
+    const roleName = role && role !== 'all' ? role : 'Technical Back Office';
+    conditions.push(`pr_role.name = $${params.length + 1}`);
+    params.push(roleName);
+
+    if (user_id && user_id !== 'all') {
+      conditions.push(`pr.processed_by = $${params.length + 1}`);
+      params.push(user_id);
+    }
+
+    const procDate = "(pr.updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date";
+    const today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date";
+    if (startDate) { conditions.push(`${procDate} >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`${procDate} <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') conditions.push(`${procDate} = ${today}`);
+      else if (period === 'week') conditions.push(`${procDate} >= ${today} - INTERVAL '7 days'`);
+      else if (period === 'month') conditions.push(`${procDate} >= ${today} - INTERVAL '30 days'`);
+    }
+
+    if (brand_id) {
+      const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+      if (brandRow?.name) {
+        const i = params.length + 1;
+        params.push(brandRow.name);
+        conditions.push(`(pr.data::jsonb->>'brand_name' = $${i} OR pr.data::jsonb->>'brand' = $${i})`);
+      }
+    }
+    if (branch_id) {
+      const branchRow = await db.get("SELECT name FROM branches WHERE id = $1", [branch_id]) as any;
+      if (branchRow?.name) {
+        const i = params.length + 1;
+        params.push(branchRow.name);
+        conditions.push(`(pr.data::jsonb->>'branch_name' = $${i} OR pr.data::jsonb->>'branch' = $${i})`);
+      }
+    }
+
+    const rows = await db.all(`
+      SELECT pu.id AS user_id, pu.username,
+        COUNT(*)::int AS processed,
+        COUNT(*) FILTER (WHERE pr.status='Approved')::int AS approved,
+        COUNT(*) FILTER (WHERE pr.status='Rejected')::int AS rejected,
+        ROUND(AVG(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS avg_resp_min,
+        ROUND(MAX(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS max_resp_min
+      FROM pending_requests pr
+      JOIN users pu ON pr.processed_by = pu.id
+      JOIN roles pr_role ON pu.role_id = pr_role.id
+      WHERE ${conditions.join(' AND ')}
+      GROUP BY pu.id, pu.username
+      ORDER BY processed DESC
+    `, params);
+
+    res.json(rows);
+  });
+
+  app.get("/api/reports/team-target", authenticate, async (_req, res) => {
+    const row = await db.get("SELECT value FROM performance_targets WHERE metric = 'avg_response_min'") as any;
+    res.json({ avg_response_min: row?.value != null ? Number(row.value) : null });
+  });
+
+  app.put("/api/reports/team-target", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const { avg_response_min } = req.body;
+    const val = (avg_response_min === '' || avg_response_min == null) ? null : Number(avg_response_min);
+    await db.query(`
+      INSERT INTO performance_targets (metric, value, updated_by, updated_at)
+      VALUES ('avg_response_min', $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+    `, [val, (req as any).user.id]);
+    res.json({ success: true });
   });
 
   app.get("/api/export", authenticate, async (req, res) => {
