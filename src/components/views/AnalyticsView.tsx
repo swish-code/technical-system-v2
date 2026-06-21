@@ -173,7 +173,12 @@ export default function AnalyticsView() {
   const [branches, setBranches] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeSubTab, setActiveSubTab] = useState<'general' | 'hide' | 'busy' | 'kpi'>('general');
+  const [activeSubTab, setActiveSubTab] = useState<'general' | 'hide' | 'busy' | 'kpi' | 'team'>('general');
+  const [teamReport, setTeamReport] = useState<any[]>([]);
+  const [respTarget, setRespTarget] = useState<number | null>(null);
+  const [targetInput, setTargetInput] = useState('');
+  const [savingTarget, setSavingTarget] = useState(false);
+  const isManagerRole = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   
   const [filters, setFilters] = useState({
     branch: 'all',
@@ -229,15 +234,24 @@ export default function AnalyticsView() {
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
-      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes] = await Promise.all([
+      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/reasons?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/timeline?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/user-kpi?${queryParams.toString()}`),
-        fetchWithAuth(`${API_URL}/reports/user-activity-details?${queryParams.toString()}`)
+        fetchWithAuth(`${API_URL}/reports/user-activity-details?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/team-performance?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/team-target`)
       ]);
+
+      if (teamRes.ok) setTeamReport(await teamRes.json());
+      if (targetRes.ok) {
+        const data = await targetRes.json();
+        setRespTarget(data?.avg_response_min ?? null);
+        setTargetInput(data?.avg_response_min != null ? String(data.avg_response_min) : '');
+      }
 
       if (bRes.ok) {
         const data = await bRes.json();
@@ -677,7 +691,107 @@ export default function AnalyticsView() {
         >
           {lang === 'ar' ? 'مؤشرات الأداء' : 'KPI'}
         </button>
+        <button
+          onClick={() => setActiveSubTab('team')}
+          className={cn(
+            "px-6 py-2 rounded-xl text-xs font-black uppercase tracking-widest transition-all min-w-max",
+            activeSubTab === 'team'
+              ? "bg-white dark:bg-zinc-900 text-brand shadow-lg"
+              : "text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200"
+          )}
+        >
+          {lang === 'ar' ? 'أداء الفريق' : 'Team'}
+        </button>
       </div>
+
+      {activeSubTab === 'team' && (
+        <div className="space-y-6">
+          <div className="glass-card p-6 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="text-xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
+                {lang === 'ar' ? 'أداء الفريق التقني' : 'Technical Team Performance'}
+              </h3>
+              <p className="text-[10px] md:text-xs text-zinc-500 font-bold uppercase tracking-widest mt-1">
+                {lang === 'ar' ? 'معالجة طلبات الإخفاء/المشغول وزمن الاستجابة' : 'Hide/Busy request handling & response time'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                {lang === 'ar' ? 'هدف متوسط الاستجابة (دقيقة)' : 'Avg response target (min)'}
+              </span>
+              {isManagerRole ? (
+                <>
+                  <input
+                    type="number"
+                    min={0}
+                    value={targetInput}
+                    onChange={(e) => setTargetInput(e.target.value)}
+                    placeholder="—"
+                    className="w-20 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white outline-none"
+                  />
+                  <button
+                    onClick={async () => {
+                      setSavingTarget(true);
+                      const res = await fetchWithAuth(`${API_URL}/reports/team-target`, {
+                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ avg_response_min: targetInput }),
+                      });
+                      if (res.ok) setRespTarget(targetInput === '' ? null : Number(targetInput));
+                      setSavingTarget(false);
+                    }}
+                    disabled={savingTarget}
+                    className="px-3 py-1 rounded-lg bg-brand text-white text-xs font-black disabled:opacity-60"
+                  >
+                    {lang === 'ar' ? 'حفظ' : 'Save'}
+                  </button>
+                </>
+              ) : (
+                <span className="text-lg font-black text-brand">{respTarget != null ? `${respTarget}` : '—'}</span>
+              )}
+            </div>
+          </div>
+
+          <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
+            <table className="w-full text-left border-collapse min-w-[700px]">
+              <thead>
+                <tr className="bg-zinc-50 dark:bg-zinc-800/50">
+                  {['User', 'Processed', 'Approved', 'Rejected', 'Avg Resp (min)', 'Max Resp (min)'].map((h, i) => (
+                    <th key={i} className="px-6 md:px-8 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+                {teamReport.length > 0 ? teamReport.map((row, i) => {
+                  const overTarget = respTarget != null && row.avg_resp_min != null && row.avg_resp_min > respTarget;
+                  return (
+                    <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
+                      <td className="px-6 md:px-8 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.processed}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-emerald-600 tabular-nums">{row.approved}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-red-500 tabular-nums">{row.rejected}</td>
+                      <td className="px-6 md:px-8 py-5">
+                        <span className={cn(
+                          "px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
+                          respTarget == null ? "text-zinc-900 dark:text-white"
+                            : overTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20"
+                            : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20"
+                        )}>
+                          {row.avg_resp_min}
+                        </span>
+                      </td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_resp_min}</td>
+                    </tr>
+                  );
+                }) : (
+                  <tr><td colSpan={6} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
+                    {lang === 'ar' ? 'لا توجد بيانات للفلتر المحدد' : 'No data for the selected filters'}
+                  </td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {activeSubTab === 'general' && (
         <div className="space-y-8">
