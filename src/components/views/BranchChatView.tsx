@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download, Search } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download, Search, Plus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -41,6 +41,10 @@ export default function BranchChatView() {
   const [brandFilter, setBrandFilter] = useState('all');
   const [search, setSearch] = useState('');
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [allBranches, setAllBranches] = useState<any[]>([]);
+  const [showNew, setShowNew] = useState(false);
+  const [newBrand, setNewBrand] = useState('all');
+  const [newSearch, setNewSearch] = useState('');
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [branchId, setBranchId] = useState<number | null>(isRestaurant ? (user?.branch_id ?? null) : null);
@@ -67,8 +71,23 @@ export default function BranchChatView() {
     } catch (e) { /* ignore */ }
   };
 
-  useEffect(() => { fetchThreads(); }, []);
+  const fetchBranches = async () => {
+    if (isRestaurant) return;
+    try {
+      const res = await fetchWithAuth(`${API_URL}/branches`);
+      if (res.ok) setAllBranches(await res.json());
+    } catch (e) { /* ignore */ }
+  };
+
+  useEffect(() => { fetchThreads(); fetchBranches(); }, []);
   useEffect(() => { fetchMessages(branchId); }, [branchId]);
+
+  // Office can start a chat with any branch (even one that never messaged).
+  const startChat = (bid: number) => {
+    setBranchId(bid);
+    setShowNew(false);
+    setNewSearch('');
+  };
 
   // Auto-open a specific branch when navigated here from a ticket / notification.
   useEffect(() => {
@@ -281,6 +300,16 @@ export default function BranchChatView() {
       return new Date(b.last_at).getTime() - new Date(a.last_at).getTime();
     });
 
+  // New-chat picker: every branch the office can reach.
+  const newBrandList = Array.from(new Set(allBranches.map((b) => b.brand_name))).sort();
+  const newBranches = allBranches
+    .filter((b) => newBrand === 'all' || b.brand_name === newBrand)
+    .filter((b) => {
+      const q = newSearch.trim().toLowerCase();
+      return !q || (b.name || '').toLowerCase().includes(q) || (b.brand_name || '').toLowerCase().includes(q);
+    })
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+
   return (
     <div className="max-w-[1200px] mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -310,6 +339,11 @@ export default function BranchChatView() {
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Threads list */}
           <div className="lg:w-80 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[72vh] overflow-y-auto space-y-2">
+            <button onClick={() => setShowNew(true)}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-brand text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
+              <Plus size={16} />
+              {lang === 'ar' ? 'محادثة جديدة' : 'New Chat'}
+            </button>
             {/* Filters */}
             <div className="space-y-2 px-1 pt-1">
               <div className="relative">
@@ -363,6 +397,45 @@ export default function BranchChatView() {
             })}
           </div>
           {ChatPane}
+        </div>
+      )}
+
+      {/* New-chat picker (office): choose a brand + branch to start a thread */}
+      {showNew && !isRestaurant && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-zinc-900/70 backdrop-blur-sm" onClick={() => setShowNew(false)} />
+          <div className="relative bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-md border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-black text-zinc-900 dark:text-white">{lang === 'ar' ? 'محادثة جديدة' : 'New Chat'}</h3>
+              <button onClick={() => setShowNew(false)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl"><X size={20} /></button>
+            </div>
+            <select value={newBrand} onChange={(e) => setNewBrand(e.target.value)}
+              className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white">
+              <option value="all">{lang === 'ar' ? 'كل البراندات' : 'All Brands'}</option>
+              {newBrandList.map((b) => <option key={b} value={b}>{b}</option>)}
+            </select>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input value={newSearch} onChange={(e) => setNewSearch(e.target.value)}
+                placeholder={lang === 'ar' ? 'بحث عن فرع...' : 'Search branch...'}
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+            </div>
+            <div className="max-h-72 overflow-y-auto space-y-1 -mx-1 px-1">
+              {newBranches.length === 0 && (
+                <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا توجد فروع' : 'No branches'}</p>
+              )}
+              {newBranches.map((b) => (
+                <button key={b.id} onClick={() => startChat(b.id)}
+                  className="w-full text-left px-3 py-2.5 rounded-xl hover:bg-brand/10 transition-all flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{b.name}</p>
+                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tight truncate">{b.brand_name}</p>
+                  </div>
+                  <MessageSquare size={16} className="text-brand shrink-0" />
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </div>
