@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, safeJson } from '../../lib/utils';
-import { Search, Filter, Eye, X, Copy, CheckCircle2, Edit2, Trash2, Globe, Calendar, Power, PowerOff, RefreshCw, AlertCircle, Download, Upload, FileSpreadsheet } from 'lucide-react';
+import { Search, Filter, Eye, EyeOff, X, Copy, CheckCircle2, Edit2, Trash2, Globe, Calendar, Power, PowerOff, RefreshCw, AlertCircle, Download, Upload, FileSpreadsheet } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Product, Brand, DynamicField, ProductFieldValue } from '../../types';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -68,7 +68,8 @@ export default function TechnicalView() {
         limit: itemsPerPage.toString(),
         brand_id: brandFilter,
         search: search,
-        days: daysFilter
+        days: daysFilter,
+        include_inactive: 'true'  // Admin view shows all products so inactive ones can be reactivated
       });
 
       const [pRes, bRes, fRes] = await Promise.all([
@@ -165,6 +166,24 @@ export default function TechnicalView() {
       }
     } catch (error) {
       console.error("Error toggling offline status:", error);
+    }
+  };
+
+  const handleToggleActive = async (product: Product) => {
+    const endpoint = product.is_active === false ? 'reactivate' : 'deactivate';
+    try {
+      const res = await fetchWithAuth(`${API_URL}/products/${product.id}/${endpoint}`, {
+        method: 'PUT',
+      });
+      if (res.ok) {
+        const label = endpoint === 'deactivate'
+          ? (lang === 'en' ? 'Product hidden from dropdowns' : 'تم إخفاء المنتج من القوائم')
+          : (lang === 'en' ? 'Product restored to dropdowns' : 'تمت استعادة المنتج في القوائم');
+        showToast(label);
+        fetchData(currentPage);
+      }
+    } catch (error) {
+      console.error("Error toggling product active status:", error);
     }
   };
 
@@ -501,9 +520,11 @@ export default function TechnicalView() {
               className={cn(
                 "glass-card p-6 rounded-[2rem] border transition-all group relative overflow-hidden cursor-pointer",
                 selectedIds.includes(product.id) ? "ring-2 ring-brand border-brand/50 shadow-lg shadow-brand/10" : "",
-                product.is_offline 
-                  ? "border-red-200 dark:border-red-900/30 bg-red-50/30 dark:bg-red-900/10 grayscale-[0.5] opacity-80" 
-                  : "border-zinc-100 dark:border-zinc-800 hover:border-brand/30"
+                product.is_active === false
+                  ? "border-amber-200 dark:border-amber-900/30 bg-amber-50/30 dark:bg-amber-900/10 grayscale-[0.3] opacity-70"
+                  : product.is_offline 
+                    ? "border-red-200 dark:border-red-900/30 bg-red-50/30 dark:bg-red-900/10 grayscale-[0.5] opacity-80" 
+                    : "border-zinc-100 dark:border-zinc-800 hover:border-brand/30"
               )}
             >
               {/* Selection Checkbox */}
@@ -516,7 +537,10 @@ export default function TechnicalView() {
                 {selectedIds.includes(product.id) && <CheckCircle2 size={14} className="text-white" />}
               </div>
 
-              {!!product.is_offline && (
+              {product.is_active === false && (
+                <div className="absolute top-0 left-0 w-full h-1 bg-amber-500" />
+              )}
+              {!!product.is_offline && product.is_active !== false && (
                 <div className="absolute top-0 left-0 w-full h-1 bg-red-500" />
               )}
               <div className="flex justify-between items-start mb-4">
@@ -525,6 +549,11 @@ export default function TechnicalView() {
                     <span className="text-[9px] font-black text-brand uppercase tracking-[0.2em] bg-brand/5 px-2 py-0.5 rounded-lg border border-brand/10">
                       {product.brand_name}
                     </span>
+                    {product.is_active === false && (
+                      <span className="text-[9px] font-black text-amber-600 uppercase tracking-[0.2em] bg-amber-50 px-2 py-0.5 rounded-lg border border-amber-100">
+                        {lang === 'en' ? 'Hidden' : 'مخفي'}
+                      </span>
+                    )}
                     {!!product.is_offline && (
                       <span className="text-[9px] font-black text-red-600 uppercase tracking-[0.2em] bg-red-50 px-2 py-0.5 rounded-lg border border-red-100">
                         Offline
@@ -579,6 +608,25 @@ export default function TechnicalView() {
                         className="p-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-brand hover:text-white rounded-lg text-zinc-500 transition-all active:scale-90"
                       >
                         <Edit2 size={14} />
+                      </button>
+                    )}
+                    {(user?.role_name === 'Manager' || user?.role_name === 'Super Visor' || user?.role_name === 'Technical Back Office' || (user?.role_name.startsWith('Marketing') && user?.role_name !== 'Restaurants')) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleToggleActive(product);
+                        }}
+                        className={cn(
+                          "p-1.5 rounded-lg transition-all active:scale-90",
+                          product.is_active === false
+                            ? "bg-emerald-500 text-white hover:bg-emerald-600"
+                            : "bg-zinc-100 dark:bg-zinc-800 hover:bg-amber-500 hover:text-white text-zinc-500"
+                        )}
+                        title={product.is_active === false
+                          ? (lang === 'en' ? 'Restore to dropdown' : 'استعادة في القائمة')
+                          : (lang === 'en' ? 'Hide from dropdown' : 'إخفاء من القائمة')}
+                      >
+                        {product.is_active === false ? <Eye size={14} /> : <EyeOff size={14} />}
                       </button>
                     )}
                     {(user?.role_name === 'Manager' || user?.role_name === 'Super Visor' || user?.role_name === 'Technical Back Office' || (user?.role_name.startsWith('Marketing') && user?.role_name !== 'Restaurants')) && (
