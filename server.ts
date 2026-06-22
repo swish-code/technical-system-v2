@@ -777,6 +777,9 @@ async function initDb() {
     comment TEXT,
     image_url TEXT,
     image_type TEXT,
+    status TEXT DEFAULT 'pending',
+    status_by INTEGER,
+    status_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     read_at TIMESTAMP,
     FOREIGN KEY (sender_id) REFERENCES users(id)
@@ -3329,6 +3332,9 @@ async function startServer() {
   try {
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN manager_responded_at TIMESTAMP");
   } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status TEXT DEFAULT 'pending'"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_by INTEGER"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_at TIMESTAMP"); } catch (e) {}
   try {
     // Who (which user) sent the office-side response, so the UI shows the real name.
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN responded_by INTEGER");
@@ -6799,8 +6805,11 @@ async function startServer() {
     if (!branch_id) return res.json([]);
 
     const msgs = await db.all(`
-      SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type, bm.created_at, u.username
-      FROM branch_messages bm JOIN users u ON bm.sender_id = u.id
+      SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type,
+             bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username
+      FROM branch_messages bm
+      JOIN users u ON bm.sender_id = u.id
+      LEFT JOIN users su ON bm.status_by = su.id
       WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
     `, [branch_id]);
 
@@ -6827,6 +6836,46 @@ async function startServer() {
       ORDER BY MAX(bm.created_at) DESC
     `);
     res.json(threads);
+  });
+
+  // The recipient (opposite side of the sender) approves/rejects a message.
+  app.put("/api/branch-chat/:id/status", authenticate, authorize(CHAT_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const { status } = req.body;
+    if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: "Invalid status" });
+
+    const msg = await db.get("SELECT bm.*, b.name AS brand_name, br.name AS branch_name FROM branch_messages bm JOIN brands b ON bm.brand_id=b.id JOIN branches br ON bm.branch_id=br.id WHERE bm.id = $1", [req.params.id]) as any;
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+
+    const isRestaurant = user.role_name === 'Restaurants';
+    // Only the OPPOSITE side may act, and a restaurant only on its own branch.
+    const senderIsRestaurant = msg.sender_role === 'Restaurants';
+    if (isRestaurant) {
+      if (senderIsRestaurant || msg.branch_id !== user.branch_id) return res.status(403).json({ error: "Not allowed" });
+    } else if (!senderIsRestaurant) {
+      return res.status(403).json({ error: "Not allowed" });
+    }
+
+    await db.query("UPDATE branch_messages SET status = $1, status_by = $2, status_at = CURRENT_TIMESTAMP WHERE id = $3", [status, user.id, msg.id]);
+
+    // Notify the original sender of the decision.
+    try {
+      const label = `${msg.brand_name} · ${msg.branch_name}`;
+      const verb = status === 'approved' ? 'approved' : 'rejected';
+      broadcast({
+        type: "NOTIFICATION",
+        notificationType: "CALL_CENTER",
+        title_en: `Message ${verb}`,
+        title_ar: status === 'approved' ? 'تمت الموافقة على الرسالة' : 'تم رفض الرسالة',
+        message_en: `${label} — ${user.username} ${verb} your message`,
+        message_ar: `${label} — ${user.username} ${status === 'approved' ? 'وافق على رسالتك' : 'رفض رسالتك'}`,
+        user_id: msg.sender_id,
+        chat_branch_id: msg.branch_id,
+      });
+      broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: msg.branch_id });
+    } catch (e) { console.error("status notify failed", e); }
+
+    res.json({ success: true });
   });
 
   app.get("/api/export", authenticate, async (req, res) => {
