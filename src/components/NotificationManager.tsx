@@ -26,16 +26,19 @@ export default function NotificationManager() {
       const isRelevant = isSystemAction || !notificationData.role_target || 
         notificationData.role_target.includes(user?.role_name || '');
       
-      const brandMatch = isSystemAction || !notificationData.brand_id || 
-        user?.brand_id === notificationData.brand_id || 
-        user?.brand_ids?.includes(notificationData.brand_id);
-        
-      const branchMatch = isSystemAction || !notificationData.branch_id || 
-        user?.branch_id === notificationData.branch_id || 
-        user?.branch_ids?.includes(notificationData.branch_id);
+      // Number-safe comparisons (ids may arrive as strings over the socket).
+      const nBrand = Number(notificationData.brand_id);
+      const nBranch = Number(notificationData.branch_id);
+      const brandMatch = isSystemAction || !notificationData.brand_id ||
+        Number(user?.brand_id) === nBrand ||
+        (user?.brand_ids || []).some((b: any) => Number(b) === nBrand);
 
-      const userMatch = !notificationData.user_id || 
-        user?.id === notificationData.user_id;
+      const branchMatch = isSystemAction || !notificationData.branch_id ||
+        Number(user?.branch_id) === nBranch ||
+        (user?.branch_ids || []).some((b: any) => Number(b) === nBranch);
+
+      const userMatch = !notificationData.user_id ||
+        Number(user?.id) === Number(notificationData.user_id);
 
       if (isRelevant && brandMatch && branchMatch && userMatch) {
         const newNotification: AppNotification = {
