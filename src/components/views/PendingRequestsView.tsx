@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate, safeJson } from '../../lib/utils';
-import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PendingRequest } from '../../types';
 import * as XLSX from 'xlsx';
@@ -28,6 +28,9 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [brands, setBrands] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
+  // Invoice-chat tickets (restaurant messages awaiting an office reply). Read-only,
+  // independent from pending_requests.
+  const [chatTickets, setChatTickets] = useState<any[]>([]);
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -81,13 +84,30 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     }
   };
 
+  const fetchTickets = async () => {
+    if (user?.role_name === 'Restaurants') return;
+    try {
+      const res = await fetchWithAuth(`${API_URL}/branch-chat/tickets`);
+      if (res.ok) setChatTickets(await safeJson(res) || []);
+    } catch { /* ignore */ }
+  };
+
+  const openChat = (branchId: number) => {
+    sessionStorage.setItem('open_chat_branch', String(branchId));
+    window.dispatchEvent(new CustomEvent('open-branch-chat', { detail: branchId }));
+  };
+
   useEffect(() => {
     fetchRequests();
+    fetchTickets();
   }, []);
 
   useEffect(() => {
     if (lastMessage?.type === 'PENDING_REQUEST_CREATED' || lastMessage?.type === 'PENDING_REQUEST_UPDATED') {
       fetchRequests();
+    }
+    if (lastMessage?.type === 'BRANCH_CHAT_UPDATED') {
+      fetchTickets();
     }
   }, [lastMessage]);
 
@@ -196,6 +216,12 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     const matchesBranch = branchFilter === 'all' || branchName === branchFilter;
     
     return matchesMode && matchesType && matchesBrand && matchesBranch;
+  });
+
+  const filteredTickets = chatTickets.filter(t => {
+    const matchesBrand = brandFilter === 'all' || t.brand_name === brandFilter;
+    const matchesBranch = branchFilter === 'all' || t.branch_name === branchFilter;
+    return matchesBrand && matchesBranch;
   });
 
   const totalPages = Math.ceil(filteredRequests.length / pageSize);
@@ -315,6 +341,55 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
           </div>
         </div>
       </div>
+
+      {/* Invoice Chat tickets — restaurant messages awaiting an office reply */}
+      {viewMode === 'pending' && filteredTickets.length > 0 && (
+        <div className="space-y-3">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={18} className="text-brand" />
+            <h3 className="text-sm font-black uppercase tracking-widest text-zinc-500">
+              {lang === 'en' ? 'Invoice Chat Tickets' : 'تذاكر مراسلات الفواتير'}
+            </h3>
+            <span className="min-w-5 h-5 px-1.5 rounded-full bg-brand text-white text-[10px] font-black flex items-center justify-center">
+              {filteredTickets.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-1 gap-3">
+            {filteredTickets.map((t) => (
+              <div key={t.id} className="bg-white dark:bg-zinc-900 rounded-2xl border border-brand/30 p-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                  {t.image_url && (
+                    <img src={t.image_url} alt="invoice" className="w-12 h-12 rounded-xl object-cover cursor-zoom-in shrink-0"
+                      onClick={() => window.open(t.image_url, '_blank')} />
+                  )}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                      <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-brand/10 text-brand border border-brand/20">
+                        {lang === 'en' ? 'Invoice Chat' : 'مراسلة فاتورة'}
+                      </span>
+                      <span className="text-xs font-bold text-zinc-500">{t.brand_name} · {t.branch_name}</span>
+                      <div className="w-1 h-1 rounded-full bg-zinc-300" />
+                      <span className="text-xs font-bold text-zinc-400">{formatDate(t.created_at)}</span>
+                    </div>
+                    <p className="font-black text-zinc-900 dark:text-white truncate">
+                      {lang === 'en' ? 'From' : 'من'}: {t.username}
+                      {t.comment ? <span className="text-zinc-500 font-medium"> — {t.comment}</span>
+                        : t.image_url ? <span className="text-zinc-400 font-medium"> — 📷</span> : null}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => openChat(t.branch_id)}
+                  className="shrink-0 flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all active:scale-95"
+                >
+                  <MessageSquare size={16} />
+                  {lang === 'en' ? 'Open & Reply' : 'فتح والرد'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div className="grid grid-cols-1 gap-4">
         {filteredRequests.length === 0 ? (

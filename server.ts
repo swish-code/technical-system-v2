@@ -6838,6 +6838,27 @@ async function startServer() {
     res.json(threads);
   });
 
+  // Open "tickets": restaurant messages not yet replied to by the office. A
+  // ticket clears as soon as any office-side message is posted after it.
+  // Read-only — does not touch pending_requests or any existing data.
+  app.get("/api/branch-chat/tickets", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const rows = await db.all(`
+      SELECT bm.id, bm.brand_id, bm.branch_id, bm.comment, bm.image_url, bm.created_at, bm.sender_id,
+        b.name AS brand_name, br.name AS branch_name, u.username
+      FROM branch_messages bm
+      JOIN brands b ON bm.brand_id = b.id
+      JOIN branches br ON bm.branch_id = br.id
+      JOIN users u ON bm.sender_id = u.id
+      WHERE bm.sender_role = 'Restaurants'
+        AND bm.created_at > COALESCE(
+          (SELECT MAX(o.created_at) FROM branch_messages o
+           WHERE o.branch_id = bm.branch_id AND o.sender_role <> 'Restaurants'),
+          '-infinity'::timestamp)
+      ORDER BY bm.created_at DESC
+    `);
+    res.json(rows);
+  });
+
   // The recipient (opposite side of the sender) approves/rejects a message.
   app.put("/api/branch-chat/:id/status", authenticate, authorize(CHAT_ROLES), async (req, res) => {
     const user = (req as any).user;
