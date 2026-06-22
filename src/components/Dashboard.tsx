@@ -44,8 +44,9 @@ import PendingRequestsView from './views/PendingRequestsView';
 import AnalyticsView from './views/AnalyticsView';
 import UserKPIView from './views/UserKPIView';
 import LateOrdersView from './views/LateOrdersView';
+import BranchChatView from './views/BranchChatView';
 import OrdersView from './views/OrdersView';
-import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert } from 'lucide-react';
+import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert, MessageSquare } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import NotificationManager from './NotificationManager';
 import { subscribeToPush } from '../lib/notificationHelper';
@@ -233,6 +234,7 @@ export default function Dashboard() {
       coding: "PLU",
       myKpi: "My KPI",
       lateOrders: "Call Center Cases",
+      branchChat: "Invoice Chat",
       callCenterConfig: "Call Center Config",
       requestsBranch: "Requests Branch",
       orders: "Orders",
@@ -255,6 +257,7 @@ export default function Dashboard() {
       coding: "PLU",
       myKpi: "مؤشرات الأداء الخاصة بي",
       lateOrders: "حالات مركز الاتصال",
+      branchChat: "مراسلات الفواتير",
       callCenterConfig: "إعدادات مركز الاتصال",
       requestsBranch: "طلبات الفروع",
       orders: "الطلبات",
@@ -269,6 +272,7 @@ export default function Dashboard() {
     { id: 'hide_unhide', label: t.hideUnhide, icon: EyeOff, roles: ["Technical Back Office", "Manager", "Call Center", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"] },
     { id: 'hide_item_config', label: t.hideItemConfig, icon: Settings, roles: ["Manager"] },
     { id: 'late_orders', label: t.lateOrders, icon: Clock, roles: ["Call Center", "Restaurants", "Manager", "Technical Back Office", "Super Visor", "Area Manager", "Operation Manager"] },
+    { id: 'branch_chat', label: t.branchChat, icon: MessageSquare, roles: ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'busy_periods', label: t.busyPeriods, icon: AlertCircle, roles: ["Technical Back Office", "Manager", "Restaurants", "Super Visor", "Call Center", "Area Manager", "Operation Manager"] },
     { id: 'requests_branch', label: t.requestsBranch, icon: Inbox, roles: ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'orders', label: t.orders, icon: FileText, roles: ["Restaurants"] },
@@ -288,17 +292,25 @@ export default function Dashboard() {
     }
   }, [activeTab, unreadCounts]);
 
-  // Clicking a case-message notification jumps to the Call Center Cases tab.
+  // Clicking a case-message / chat notification jumps to the right tab.
   useEffect(() => {
-    const handler = () => setActiveTab('late_orders');
-    window.addEventListener('open-late-order', handler);
-    // Deep-link from a desktop push notification (/?case=123).
+    const caseHandler = () => setActiveTab('late_orders');
+    const chatHandler = () => setActiveTab('branch_chat');
+    window.addEventListener('open-late-order', caseHandler);
+    window.addEventListener('open-branch-chat', chatHandler);
+    // Deep-link from a desktop push notification (/?case=123 or /?chat=45).
     const params = new URLSearchParams(window.location.search);
     if (params.get('case')) {
       setActiveTab('late_orders');
       window.history.replaceState({}, '', window.location.pathname);
+    } else if (params.get('chat')) {
+      setActiveTab('branch_chat');
+      window.history.replaceState({}, '', window.location.pathname);
     }
-    return () => window.removeEventListener('open-late-order', handler);
+    return () => {
+      window.removeEventListener('open-late-order', caseHandler);
+      window.removeEventListener('open-branch-chat', chatHandler);
+    };
   }, []);
 
   const renderView = () => {
@@ -334,6 +346,9 @@ export default function Dashboard() {
     }
     if (activeTab === 'late_orders') {
       return <LateOrdersView />;
+    }
+    if (activeTab === 'branch_chat') {
+      return <BranchChatView />;
     }
     if (activeTab === 'analytics') {
       return <AnalyticsView />;

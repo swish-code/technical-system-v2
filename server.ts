@@ -768,6 +768,21 @@ async function initDb() {
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
+  CREATE TABLE IF NOT EXISTS branch_messages (
+    id SERIAL PRIMARY KEY,
+    brand_id INTEGER NOT NULL,
+    branch_id INTEGER NOT NULL,
+    sender_id INTEGER NOT NULL,
+    sender_role TEXT NOT NULL,
+    comment TEXT,
+    image_url TEXT,
+    image_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    read_at TIMESTAMP,
+    FOREIGN KEY (sender_id) REFERENCES users(id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_branch_messages_branch ON branch_messages(branch_id, created_at);
+
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -6722,6 +6737,96 @@ async function startServer() {
       ON CONFLICT (metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
     `, [val, (req as any).user.id]);
     res.json({ success: true });
+  });
+
+  // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
+  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"];
+
+  app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
+    const user = (req as any).user;
+    const fromRestaurant = user.role_name === 'Restaurants';
+    let branch_id = fromRestaurant ? user.branch_id : req.body.branch_id;
+    const comment = (req.body.comment || '').trim() || null;
+    const image_url = req.file ? `/uploads/${req.file.filename}` : null;
+    const image_type = req.file ? req.file.mimetype : null;
+
+    if (!branch_id) return res.status(400).json({ error: "branch_id required" });
+    if (!comment && !image_url) return res.status(400).json({ error: "Message is empty" });
+
+    const branch = await db.get("SELECT id, brand_id, name FROM branches WHERE id = $1", [branch_id]) as any;
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    const ins = await db.query(`
+      INSERT INTO branch_messages (brand_id, branch_id, sender_id, sender_role, comment, image_url, image_type)
+      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at
+    `, [branch.brand_id, branch.id, user.id, user.role_name, comment, image_url, image_type]);
+
+    try {
+      const brand = await db.get("SELECT name FROM brands WHERE id = $1", [branch.brand_id]) as any;
+      const label = `${brand?.name || ''} · ${branch.name}`;
+      const preview = comment ? comment.slice(0, 80) : '📷';
+      const recipients = fromRestaurant
+        ? ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]
+        : ["Restaurants"];
+      broadcast({
+        type: "NOTIFICATION",
+        notificationType: "CALL_CENTER",
+        title_en: "New invoice message",
+        title_ar: "رسالة فاتورة جديدة",
+        message_en: `${label} — ${user.username}: ${preview}`,
+        message_ar: `${label} — ${user.username}: ${preview}`,
+        role_target: recipients,
+        ...(fromRestaurant ? {} : { brand_id: branch.brand_id, branch_id: branch.id }),
+        chat_branch_id: branch.id,
+      });
+      broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
+      const push = {
+        title: "New invoice message",
+        body: `${label} — ${user.username}: ${preview}`,
+        tag: `branch-chat-${branch.id}`,
+        data: { type: "BRANCH_CHAT", branchId: branch.id, url: `/?chat=${branch.id}` },
+      };
+      if (fromRestaurant) await sendPushToRoles(recipients, push);
+      else await sendPushToRoles(["Restaurants"], push, branch.id);
+    } catch (e) { console.error("branch-chat notify failed", e); }
+
+    res.json({ id: ins.rows[0].id });
+  });
+
+  app.get("/api/branch-chat", authenticate, authorize(CHAT_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const branch_id = user.role_name === 'Restaurants' ? user.branch_id : (req.query.branch_id as string);
+    if (!branch_id) return res.json([]);
+
+    const msgs = await db.all(`
+      SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type, bm.created_at, u.username
+      FROM branch_messages bm JOIN users u ON bm.sender_id = u.id
+      WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
+    `, [branch_id]);
+
+    // Mark the OTHER side's messages as read for this viewer.
+    const isRestaurant = user.role_name === 'Restaurants';
+    await db.query(`
+      UPDATE branch_messages SET read_at = CURRENT_TIMESTAMP
+      WHERE branch_id = $1 AND read_at IS NULL
+        AND sender_role ${isRestaurant ? "<>" : "="} 'Restaurants'
+    `, [branch_id]);
+
+    res.json(msgs);
+  });
+
+  app.get("/api/branch-chat/threads", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const threads = await db.all(`
+      SELECT bm.branch_id, b.name AS brand_name, br.name AS branch_name,
+        MAX(bm.created_at) AS last_at,
+        COUNT(*) FILTER (WHERE bm.sender_role = 'Restaurants' AND bm.read_at IS NULL)::int AS unread
+      FROM branch_messages bm
+      JOIN branches br ON bm.branch_id = br.id
+      JOIN brands b ON bm.brand_id = b.id
+      GROUP BY bm.branch_id, b.name, br.name
+      ORDER BY MAX(bm.created_at) DESC
+    `);
+    res.json(threads);
   });
 
   app.get("/api/export", authenticate, async (req, res) => {
