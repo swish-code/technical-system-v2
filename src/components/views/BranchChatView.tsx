@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
 
@@ -32,6 +33,8 @@ export default function BranchChatView() {
   const { fetchWithAuth } = useFetch();
   const lastMessage = useWebSocket();
   const isRestaurant = user?.role_name === 'Restaurants';
+  const isManager = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
+  const [exporting, setExporting] = useState(false);
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [branchId, setBranchId] = useState<number | null>(isRestaurant ? (user?.branch_id ?? null) : null);
@@ -101,6 +104,34 @@ export default function BranchChatView() {
       });
       if (res.ok) await fetchMessages(branchId);
     } catch (e) { /* ignore */ }
+  };
+
+  // Manager-only: download the full chat log (who sent, when, reply, response time).
+  const exportExcel = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/branch-chat/export`);
+      if (!res.ok) return;
+      const rows: any[] = await res.json();
+      const data = rows.map((r) => ({
+        Brand: r.brand_name,
+        Branch: r.branch_name,
+        'Sent At': formatDate(r.created_at),
+        'Sender': r.username,
+        'Role': r.sender_role === 'Restaurants' ? 'Restaurant' : 'Technical',
+        'Message': r.comment || '',
+        'Image': r.has_image ? 'Yes' : 'No',
+        'Status': r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : 'Pending',
+        'Replied To': r.replied_to || '',
+        'Response Time (min)': r.response_minutes ?? '',
+      }));
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet(data);
+      ws['!cols'] = [{ wch: 16 }, { wch: 16 }, { wch: 20 }, { wch: 16 }, { wch: 12 }, { wch: 40 }, { wch: 8 }, { wch: 10 }, { wch: 16 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, ws, 'Invoice Chat');
+      XLSX.writeFile(wb, `Invoice_Chat_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
+    } catch (e) { /* ignore */ } finally { setExporting(false); }
   };
 
   const ChatPane = (
@@ -219,16 +250,25 @@ export default function BranchChatView() {
 
   return (
     <div className="max-w-[1200px] mx-auto space-y-6">
-      <div className="space-y-1">
-        <div className="flex items-center gap-2">
-          <MessageSquare className="text-brand" size={24} />
-          <h2 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
-            {lang === 'ar' ? 'مراسلات الفواتير' : 'Invoice Chat'}
-          </h2>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="space-y-1">
+          <div className="flex items-center gap-2">
+            <MessageSquare className="text-brand" size={24} />
+            <h2 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
+              {lang === 'ar' ? 'مراسلات الفواتير' : 'Invoice Chat'}
+            </h2>
+          </div>
+          <p className="text-zinc-500 font-medium text-sm">
+            {lang === 'ar' ? 'تبادل صور الفواتير والتعليقات مع التكنيكال' : 'Share invoice photos and comments with the technical team'}
+          </p>
         </div>
-        <p className="text-zinc-500 font-medium text-sm">
-          {lang === 'ar' ? 'تبادل صور الفواتير والتعليقات مع التكنيكال' : 'Share invoice photos and comments with the technical team'}
-        </p>
+        {isManager && (
+          <button onClick={exportExcel} disabled={exporting}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-emerald-600 text-white text-xs font-black uppercase tracking-widest hover:bg-emerald-700 disabled:opacity-50">
+            <Download size={16} />
+            {exporting ? (lang === 'ar' ? 'جارٍ التصدير...' : 'Exporting...') : (lang === 'ar' ? 'تصدير Excel' : 'Export Excel')}
+          </button>
+        )}
       </div>
 
       {isRestaurant ? (

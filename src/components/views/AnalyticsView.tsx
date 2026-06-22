@@ -175,6 +175,7 @@ export default function AnalyticsView() {
   const [loading, setLoading] = useState(true);
   const [activeSubTab, setActiveSubTab] = useState<'general' | 'hide' | 'busy' | 'kpi' | 'team'>('general');
   const [teamReport, setTeamReport] = useState<any[]>([]);
+  const [chatPerf, setChatPerf] = useState<any[]>([]);
   const [respTarget, setRespTarget] = useState<number | null>(null);
   const [targetInput, setTargetInput] = useState('');
   const [savingTarget, setSavingTarget] = useState(false);
@@ -234,7 +235,7 @@ export default function AnalyticsView() {
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
-      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes] = await Promise.all([
+      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
@@ -243,10 +244,12 @@ export default function AnalyticsView() {
         fetchWithAuth(`${API_URL}/reports/user-kpi?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/user-activity-details?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/team-performance?${queryParams.toString()}`),
-        fetchWithAuth(`${API_URL}/reports/team-target`)
+        fetchWithAuth(`${API_URL}/reports/team-target`),
+        fetchWithAuth(`${API_URL}/reports/chat-performance?${queryParams.toString()}`)
       ]);
 
       if (teamRes.ok) setTeamReport(await teamRes.json());
+      if (chatRes.ok) setChatPerf(await chatRes.json());
       if (targetRes.ok) {
         const data = await targetRes.json();
         setRespTarget(data?.avg_response_min ?? null);
@@ -789,6 +792,43 @@ export default function AnalyticsView() {
                 )}
               </tbody>
             </table>
+          </div>
+
+          {/* Invoice Chat — replies per employee */}
+          <div className="space-y-3">
+            <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
+              {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'Invoice Chat Replies'}
+            </h3>
+            <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
+              <table className="w-full text-left border-collapse min-w-[500px]">
+                <thead>
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/50">
+                    {[
+                      lang === 'ar' ? 'الموظف' : 'User',
+                      lang === 'ar' ? 'عدد الردود' : 'Replies',
+                      lang === 'ar' ? 'متوسط دقائق الرد' : 'Avg Reply (min)',
+                      lang === 'ar' ? 'أطول رد (دقيقة)' : 'Max Reply (min)',
+                    ].map((h, i) => (
+                      <th key={i} className="px-6 md:px-8 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+                  {chatPerf.length > 0 ? chatPerf.map((row, i) => (
+                    <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
+                      <td className="px-6 md:px-8 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.replies}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-brand tabular-nums">{row.avg_reply_min}</td>
+                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_reply_min}</td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={4} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
+                      {lang === 'ar' ? 'لا توجد ردود للفلتر المحدد' : 'No replies for the selected filters'}
+                    </td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       )}
