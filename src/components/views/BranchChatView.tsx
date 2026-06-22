@@ -65,7 +65,11 @@ export default function BranchChatView() {
   useEffect(() => {
     if (lastMessage?.type === 'BRANCH_CHAT_UPDATED') {
       if (!isRestaurant) fetchThreads();
-      if (lastMessage.branch_id === branchId) fetchMessages(branchId);
+      // A restaurant only has one thread, so always refresh it. Office refreshes
+      // the open thread when it matches (number-safe comparison).
+      if (branchId != null && (isRestaurant || Number(lastMessage.branch_id) === Number(branchId))) {
+        fetchMessages(branchId);
+      }
     }
   }, [lastMessage]);
 
