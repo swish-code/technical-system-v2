@@ -64,6 +64,17 @@ export default function BranchChatView() {
   useEffect(() => { fetchThreads(); }, []);
   useEffect(() => { fetchMessages(branchId); }, [branchId]);
 
+  // Auto-open a specific branch when navigated here from a ticket / notification.
+  useEffect(() => {
+    if (isRestaurant) return;
+    const pick = (bid: any) => { const n = Number(bid); if (n) setBranchId(n); };
+    const stored = sessionStorage.getItem('open_chat_branch');
+    if (stored) { pick(stored); sessionStorage.removeItem('open_chat_branch'); }
+    const handler = (e: any) => { if (e?.detail) pick(e.detail); };
+    window.addEventListener('open-branch-chat', handler);
+    return () => window.removeEventListener('open-branch-chat', handler);
+  }, []);
+
   // Live updates
   useEffect(() => {
     if (lastMessage?.type === 'BRANCH_CHAT_UPDATED') {
