@@ -6828,7 +6828,10 @@ async function startServer() {
     const threads = await db.all(`
       SELECT bm.branch_id, b.name AS brand_name, br.name AS branch_name,
         MAX(bm.created_at) AS last_at,
-        COUNT(*) FILTER (WHERE bm.sender_role = 'Restaurants' AND bm.read_at IS NULL)::int AS unread
+        COUNT(*) FILTER (WHERE bm.sender_role = 'Restaurants' AND bm.read_at IS NULL)::int AS unread,
+        (SELECT comment FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_comment,
+        (SELECT (image_url IS NOT NULL) FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_has_image,
+        (SELECT sender_role FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_sender_role
       FROM branch_messages bm
       JOIN branches br ON bm.branch_id = br.id
       JOIN brands b ON bm.brand_id = b.id

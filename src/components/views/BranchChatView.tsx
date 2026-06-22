@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download, Search } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -26,6 +26,9 @@ interface Thread {
   branch_name: string;
   last_at: string;
   unread: number;
+  last_comment: string | null;
+  last_has_image: boolean;
+  last_sender_role: string | null;
 }
 
 export default function BranchChatView() {
@@ -35,6 +38,9 @@ export default function BranchChatView() {
   const isRestaurant = user?.role_name === 'Restaurants';
   const isManager = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   const [exporting, setExporting] = useState(false);
+  const [brandFilter, setBrandFilter] = useState('all');
+  const [search, setSearch] = useState('');
+  const [unreadOnly, setUnreadOnly] = useState(false);
 
   const [threads, setThreads] = useState<Thread[]>([]);
   const [branchId, setBranchId] = useState<number | null>(isRestaurant ? (user?.branch_id ?? null) : null);
@@ -259,6 +265,22 @@ export default function BranchChatView() {
     </div>
   );
 
+  const brandList = Array.from(new Set(threads.map((t) => t.brand_name))).sort();
+  const totalUnread = threads.reduce((s, t) => s + (t.unread || 0), 0);
+  const shortTime = (d: string) => new Date(d).toLocaleString(lang === 'ar' ? 'ar' : 'en', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  const visibleThreads = threads
+    .filter((t) => brandFilter === 'all' || t.brand_name === brandFilter)
+    .filter((t) => !unreadOnly || t.unread > 0)
+    .filter((t) => {
+      const q = search.trim().toLowerCase();
+      return !q || t.branch_name.toLowerCase().includes(q) || t.brand_name.toLowerCase().includes(q);
+    })
+    .sort((a, b) => {
+      const ua = a.unread > 0 ? 1 : 0, ub = b.unread > 0 ? 1 : 0;
+      if (ua !== ub) return ub - ua;
+      return new Date(b.last_at).getTime() - new Date(a.last_at).getTime();
+    });
+
   return (
     <div className="max-w-[1200px] mx-auto space-y-6">
       <div className="flex items-start justify-between gap-4 flex-wrap">
@@ -287,27 +309,58 @@ export default function BranchChatView() {
       ) : (
         <div className="flex flex-col lg:flex-row gap-6">
           {/* Threads list */}
-          <div className="lg:w-72 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[70vh] overflow-y-auto">
-            <p className="px-3 py-2 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'الفروع' : 'Branches'}</p>
-            {threads.length === 0 && <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا محادثات' : 'No chats'}</p>}
-            {threads.map((t) => (
-              <button
-                key={t.branch_id}
-                onClick={() => setBranchId(t.branch_id)}
-                className={cn(
-                  "w-full text-left px-3 py-3 rounded-2xl transition-all flex items-center justify-between gap-2",
-                  branchId === t.branch_id ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"
-                )}
-              >
-                <div className="min-w-0">
-                  <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{t.branch_name}</p>
-                  <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tight truncate">{t.brand_name}</p>
-                </div>
-                {t.unread > 0 && (
-                  <span className="shrink-0 min-w-5 h-5 px-1.5 rounded-full bg-brand text-white text-[10px] font-black flex items-center justify-center">{t.unread}</span>
-                )}
+          <div className="lg:w-80 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[72vh] overflow-y-auto space-y-2">
+            {/* Filters */}
+            <div className="space-y-2 px-1 pt-1">
+              <div className="relative">
+                <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+                <input value={search} onChange={(e) => setSearch(e.target.value)}
+                  placeholder={lang === 'ar' ? 'بحث عن فرع...' : 'Search branch...'}
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+              </div>
+              <select value={brandFilter} onChange={(e) => setBrandFilter(e.target.value)}
+                className="w-full px-3 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white">
+                <option value="all">{lang === 'ar' ? 'كل البراندات' : 'All Brands'}</option>
+                {brandList.map((b) => <option key={b} value={b}>{b}</option>)}
+              </select>
+              <button onClick={() => setUnreadOnly((v) => !v)}
+                className={cn("w-full px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all",
+                  unreadOnly ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand")}>
+                {lang === 'ar' ? 'غير المقروء فقط' : 'Unread only'}{totalUnread > 0 ? ` · ${totalUnread}` : ''}
               </button>
-            ))}
+            </div>
+
+            {visibleThreads.length === 0 && <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا محادثات' : 'No chats'}</p>}
+            {visibleThreads.map((t) => {
+              const preview = t.last_comment || (t.last_has_image ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '');
+              return (
+                <button
+                  key={t.branch_id}
+                  onClick={() => setBranchId(t.branch_id)}
+                  className={cn(
+                    "w-full text-left px-3 py-2.5 rounded-2xl transition-all flex items-start gap-2",
+                    branchId === t.branch_id ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"
+                  )}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{t.branch_name}</p>
+                      <span className="shrink-0 text-[9px] font-bold text-zinc-400">{shortTime(t.last_at)}</span>
+                    </div>
+                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tight truncate">{t.brand_name}</p>
+                    {preview && (
+                      <p className={cn("text-xs truncate mt-0.5",
+                        t.unread > 0 ? "text-zinc-700 dark:text-zinc-200 font-bold" : "text-zinc-400 font-medium")}>
+                        {t.last_sender_role && t.last_sender_role !== 'Restaurants' ? (lang === 'ar' ? 'أنت: ' : 'You: ') : ''}{preview}
+                      </p>
+                    )}
+                  </div>
+                  {t.unread > 0 && (
+                    <span className="shrink-0 min-w-5 h-5 px-1.5 rounded-full bg-brand text-white text-[10px] font-black flex items-center justify-center mt-0.5">{t.unread}</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
           {ChatPane}
         </div>
