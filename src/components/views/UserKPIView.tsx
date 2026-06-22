@@ -47,22 +47,25 @@ export default function UserKPIView() {
   const [period, setPeriod] = useState('all');
   const [teamSelf, setTeamSelf] = useState<any | null>(null);
   const [respTarget, setRespTarget] = useState<number | null>(null);
+  const [chatSelf, setChatSelf] = useState<any | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
 
     try {
-      const [kpiRes, detailsRes, teamRes, targetRes] = await Promise.all([
+      const [kpiRes, detailsRes, teamRes, targetRes, chatRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/user-kpi?period=${period}`),
         fetchWithAuth(`${API_URL}/reports/user-activity-details?period=${period}`),
         fetchWithAuth(`${API_URL}/reports/team-performance?period=${period}`),
-        fetchWithAuth(`${API_URL}/reports/team-target`)
+        fetchWithAuth(`${API_URL}/reports/team-target`),
+        fetchWithAuth(`${API_URL}/reports/chat-performance?period=${period}`)
       ]);
 
       if (kpiRes.ok) setUserKpi(await kpiRes.json());
       if (detailsRes.ok) setUserActivityDetails(await detailsRes.json());
       if (teamRes.ok) { const rows = await teamRes.json(); setTeamSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
       if (targetRes.ok) { const d = await targetRes.json(); setRespTarget(d?.avg_response_min ?? null); }
+      if (chatRes.ok) { const rows = await chatRes.json(); setChatSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
     } catch (error: any) {
       if (error.isAuthError) return;
       console.error("Error fetching user KPI:", error);
@@ -271,6 +274,26 @@ export default function UserKPIView() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {chatSelf && (
+          <div className="mb-10 p-6 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
+            <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight mb-5">
+              {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'My Invoice Chat Replies'}
+            </h3>
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+              {[
+                { label: lang === 'ar' ? 'عدد الردود' : 'Replies', value: chatSelf.replies, color: 'text-zinc-900 dark:text-white' },
+                { label: lang === 'ar' ? 'متوسط دقائق الرد' : 'Avg Reply (min)', value: chatSelf.avg_reply_min, color: 'text-brand' },
+                { label: lang === 'ar' ? 'أطول رد (دقيقة)' : 'Max Reply (min)', value: chatSelf.max_reply_min, color: 'text-zinc-900 dark:text-white' },
+              ].map((c, i) => (
+                <div key={i} className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800">
+                  <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}</p>
+                  <p className={cn("text-2xl font-black tabular-nums", c.color)}>{c.value}</p>
+                </div>
+              ))}
             </div>
           </div>
         )}

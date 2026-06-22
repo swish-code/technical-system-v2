@@ -6878,6 +6878,101 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Full chat log for Excel export (Manager-level). One row per message; a
+  // "reply" is a message whose immediately-preceding thread message is from the
+  // opposite side, so response_minutes = this message - the message it replied to.
+  app.get("/api/branch-chat/export", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const rows = await db.all(`
+      WITH ordered AS (
+        SELECT bm.id, bm.branch_id, bm.created_at, bm.comment, bm.image_url, bm.status, bm.sender_role,
+          b.name AS brand_name, br.name AS branch_name, u.username,
+          CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END AS side,
+          LAG(bm.created_at) OVER w AS prev_at,
+          LAG(CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END) OVER w AS prev_side,
+          LAG(u.username) OVER w AS prev_user
+        FROM branch_messages bm
+        JOIN brands b ON bm.brand_id = b.id
+        JOIN branches br ON bm.branch_id = br.id
+        JOIN users u ON bm.sender_id = u.id
+        WINDOW w AS (PARTITION BY bm.branch_id ORDER BY bm.created_at, bm.id)
+      )
+      SELECT brand_name, branch_name, created_at, username, sender_role,
+        comment, (image_url IS NOT NULL) AS has_image, status,
+        CASE WHEN prev_side IS NOT NULL AND prev_side <> side THEN prev_user END AS replied_to,
+        CASE WHEN prev_side IS NOT NULL AND prev_side <> side
+             THEN ROUND(EXTRACT(EPOCH FROM (created_at - prev_at)) / 60)::int END AS response_minutes
+      FROM ordered
+      ORDER BY brand_name, branch_name, created_at
+    `);
+    res.json(rows);
+  });
+
+  // Per-employee chat reply performance (replies sent + avg reply minutes).
+  app.get("/api/reports/chat-performance", authenticate, authorize(["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"]), async (req, res) => {
+    const reqUser = (req as any).user;
+    let { startDate, endDate, brand_id, branch_id, role, user_id, period } = req.query as any;
+
+    const managerRoles = ["Manager", "Super Visor", "Operation Manager"];
+    if (!managerRoles.includes(reqUser.role_name)) user_id = String(reqUser.id);
+
+    // Brand/branch scope the pairing CTE (pairing is per-branch, so this is safe).
+    const cteParams: any[] = [];
+    const cteConds: string[] = [];
+    if (brand_id) { cteConds.push(`bm.brand_id = $${cteParams.length + 1}`); cteParams.push(brand_id); }
+    if (branch_id) { cteConds.push(`bm.branch_id = $${cteParams.length + 1}`); cteParams.push(branch_id); }
+    const cteWhere = cteConds.length ? `WHERE ${cteConds.join(' AND ')}` : '';
+
+    // Role / user / date filter the replies themselves (outer query).
+    const params = [...cteParams];
+    const outer: string[] = [];
+    const hasUser = user_id && user_id !== 'all';
+    if (role && role !== 'all') {
+      outer.push(`ro.name = $${params.length + 1}`); params.push(role);
+    } else if (!hasUser) {
+      // No specific user/role → show employees only (exclude restaurant users).
+      outer.push(`ro.name <> 'Restaurants'`);
+    }
+    if (hasUser) { outer.push(`r.sender_id = $${params.length + 1}`); params.push(user_id); }
+
+    const rDate = "(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date";
+    const today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date";
+    if (startDate) { outer.push(`${rDate} >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { outer.push(`${rDate} <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') outer.push(`${rDate} = ${today}`);
+      else if (period === 'week') outer.push(`${rDate} >= ${today} - INTERVAL '7 days'`);
+      else if (period === 'month') outer.push(`${rDate} >= ${today} - INTERVAL '30 days'`);
+    }
+
+    const rows = await db.all(`
+      WITH ordered AS (
+        SELECT bm.sender_id, bm.created_at,
+          CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END AS side,
+          LAG(bm.created_at) OVER w AS prev_at,
+          LAG(CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END) OVER w AS prev_side
+        FROM branch_messages bm
+        ${cteWhere}
+        WINDOW w AS (PARTITION BY bm.branch_id ORDER BY bm.created_at, bm.id)
+      ),
+      r AS (
+        SELECT sender_id, created_at, EXTRACT(EPOCH FROM (created_at - prev_at)) / 60 AS resp_min
+        FROM ordered WHERE prev_side IS NOT NULL AND prev_side <> side
+      )
+      SELECT u.id AS user_id, u.username,
+        COUNT(*)::int AS replies,
+        ROUND(AVG(r.resp_min))::int AS avg_reply_min,
+        ROUND(MAX(r.resp_min))::int AS max_reply_min
+      FROM r
+      JOIN users u ON r.sender_id = u.id
+      JOIN roles ro ON u.role_id = ro.id
+      WHERE ${outer.join(' AND ')}
+      GROUP BY u.id, u.username
+      ORDER BY replies DESC
+    `, params);
+
+    res.json(rows);
+  });
+
   app.get("/api/export", authenticate, async (req, res) => {
     const products = await db.all(`
       SELECT p.id, b.name as brand, pc.code as product_code, p.created_at
