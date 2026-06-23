@@ -853,6 +853,9 @@ async function initDb() {
   CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_audit_logs_user ON audit_logs(user_id);
   CREATE INDEX IF NOT EXISTS idx_busy_period_records_created ON busy_period_records(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_pending_requests_created ON pending_requests(created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_pending_requests_user ON pending_requests(user_id);
+  CREATE INDEX IF NOT EXISTS idx_pfv_field_product ON product_field_values(field_id, product_id);
   CREATE INDEX IF NOT EXISTS idx_hidden_items_created ON hidden_items(created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_hide_history_timestamp ON hide_history(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_branches_brand ON branches(brand_id);
@@ -2915,39 +2918,48 @@ async function startServer() {
     const brandsMap = Object.fromEntries(brandsTable.map((b: any) => [String(b.id), b.name]));
     const branchesMap = Object.fromEntries(branchesTable.map((b: any) => [String(b.id), b.name]));
 
-    const resolveRequestData = async (r: any) => {
-      const data = JSON.parse(r.data);
-      if (r.type === 'hide_unhide') {
-        // Brand: prefer the request's own brand_id, else fall back to the
-        // requesting user's brand (e.g. unhide requests carry no brand_id).
-        if (data.brand_id) {
-          data.brand_name = brandsMap[String(data.brand_id)] || 'Unknown';
-        } else if (r.requester_brand_id) {
-          data.brand_name = brandsMap[String(r.requester_brand_id)] || data.brand_name;
+    // Batch-resolve a list of requests: parse JSON, map brand/branch names from
+    // the in-memory maps, and fetch ALL product names in one query (instead of
+    // two queries per request — the old N+1 that made this page slow).
+    const resolveAll = async (requests: any[]) => {
+      const allIds = new Set<number>();
+      const parsed = requests.map((r) => {
+        let data: any = {};
+        try { data = JSON.parse(r.data); } catch { data = {}; }
+        if (r.type === 'hide_unhide' && Array.isArray(data.product_ids)) {
+          data.product_ids.forEach((id: number) => allIds.add(id));
         }
-        // Branch: prefer the request's own branch_id; if missing (e.g. unhide
-        // requests), show the requesting restaurant user's own branch instead of
-        // the misleading "All Branches". Only true brand-wide requests with no
-        // requester branch fall back to "All Branches".
-        if (data.branch_id) {
-          data.branch_name = branchesMap[String(data.branch_id)] || 'Unknown';
-        } else if (r.requester_branch_id) {
-          data.branch_name = branchesMap[String(r.requester_branch_id)] || 'All Branches';
-        } else {
-          data.branch_name = 'All Branches';
-        }
-        if (data.product_ids && data.product_ids.length > 0) {
-          const productNameFieldId = await getProductNameFieldId();
-          const placeholders = data.product_ids.map((_: any, i: number) => `$${i + 2}`).join(',');
-          const products = await db.all(`
-            SELECT fv.product_id, fv.value as name
-            FROM product_field_values fv
-            WHERE fv.field_id = $1 AND fv.product_id IN (${placeholders})
-          `, [productNameFieldId, ...data.product_ids]) as { product_id: number, name: string }[];
-          data.resolved_products = products;
-        }
+        return { r, data };
+      });
+
+      const nameById: Record<string, { product_id: number, name: string }> = {};
+      if (allIds.size > 0) {
+        const productNameFieldId = await getProductNameFieldId();
+        const ids = Array.from(allIds);
+        const placeholders = ids.map((_, i) => `$${i + 2}`).join(',');
+        const rows = await db.all(`
+          SELECT fv.product_id, fv.value as name
+          FROM product_field_values fv
+          WHERE fv.field_id = $1 AND fv.product_id IN (${placeholders})
+        `, [productNameFieldId, ...ids]) as { product_id: number, name: string }[];
+        for (const row of rows) nameById[String(row.product_id)] = { product_id: row.product_id, name: row.name };
       }
-      return { ...r, data };
+
+      return parsed.map(({ r, data }) => {
+        if (r.type === 'hide_unhide') {
+          if (data.brand_id) data.brand_name = brandsMap[String(data.brand_id)] || 'Unknown';
+          else if (r.requester_brand_id) data.brand_name = brandsMap[String(r.requester_brand_id)] || data.brand_name;
+
+          if (data.branch_id) data.branch_name = branchesMap[String(data.branch_id)] || 'Unknown';
+          else if (r.requester_branch_id) data.branch_name = branchesMap[String(r.requester_branch_id)] || 'All Branches';
+          else data.branch_name = 'All Branches';
+
+          if (Array.isArray(data.product_ids) && data.product_ids.length > 0) {
+            data.resolved_products = data.product_ids.map((id: number) => nameById[String(id)]).filter(Boolean);
+          }
+        }
+        return { ...r, data };
+      });
     };
 
     // If no pagination requested, return all (backward compatibility)
@@ -2961,7 +2973,7 @@ async function startServer() {
         ORDER BY pr.created_at DESC
       `;
       const requests = await db.all(query, params);
-      const parsedRequests = await Promise.all(requests.map(resolveRequestData));
+      const parsedRequests = await resolveAll(requests);
       return res.json(parsedRequests);
     }
 
@@ -2979,7 +2991,7 @@ async function startServer() {
     const total = parseInt(totalResult.total || '0');
 
     const query = `
-      SELECT pr.*, u.username, p.username as processor_name
+      SELECT pr.*, u.username, u.brand_id AS requester_brand_id, u.branch_id AS requester_branch_id, p.username as processor_name
       FROM pending_requests pr
       JOIN users u ON pr.user_id = u.id
       LEFT JOIN users p ON pr.processed_by = p.id
@@ -2987,9 +2999,9 @@ async function startServer() {
       ORDER BY pr.created_at DESC
       LIMIT $${params.length + 1} OFFSET $${params.length + 2}
     `;
-    
+
     const requests = await db.all(query, [...params, limitNum, offset]);
-    const parsedRequests = await Promise.all(requests.map(resolveRequestData));
+    const parsedRequests = await resolveAll(requests);
     
     res.json({
       data: parsedRequests,
