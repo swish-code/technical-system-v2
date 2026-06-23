@@ -292,14 +292,8 @@ export default function BranchChatView() {
 
                     {m.sender_role === 'Restaurants' && (() => {
                       const onMine = mine; // restaurant viewing own (green) bubble
-                      if (m.answered) {
-                        return (
-                          <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
-                            onMine ? "text-white/90" : "text-emerald-600 dark:text-emerald-400")}>
-                            <CheckCheck size={13} /> {lang === 'ar' ? 'تم الرد' : 'Replied'}
-                          </div>
-                        );
-                      }
+                      // A deliberate Dismiss wins over an auto "replied" (a later
+                      // office message to another message shouldn't mark this replied).
                       if (m.resolved_at) {
                         return (
                           <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
@@ -307,6 +301,14 @@ export default function BranchChatView() {
                             title={m.resolve_reason ? `${lang === 'ar' ? 'السبب' : 'Reason'}: ${m.resolve_reason}` : undefined}>
                             <Check size={13} /> {lang === 'ar' ? 'تم بدون رد' : 'Dismissed'}
                             {m.resolved_by_name ? ` · ${m.resolved_by_name}` : ''}
+                          </div>
+                        );
+                      }
+                      if (m.answered) {
+                        return (
+                          <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
+                            onMine ? "text-white/90" : "text-emerald-600 dark:text-emerald-400")}>
+                            <CheckCheck size={13} /> {lang === 'ar' ? 'تم الرد' : 'Replied'}
                           </div>
                         );
                       }
