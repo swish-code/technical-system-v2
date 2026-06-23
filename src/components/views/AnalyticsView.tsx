@@ -755,140 +755,85 @@ export default function AnalyticsView() {
                 {lang === 'ar' ? 'أداء الفريق التقني' : 'Technical Team Performance'}
               </h3>
               <p className="text-[10px] md:text-xs text-zinc-500 font-bold uppercase tracking-widest mt-1">
-                {lang === 'ar' ? 'معالجة طلبات الإخفاء/المشغول وزمن الاستجابة' : 'Hide/Busy request handling & response time'}
+                {lang === 'ar' ? 'معالجة الطلبات + ردود الشات' : 'Request handling + chat replies'}
               </p>
             </div>
-            <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-              <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
-                {lang === 'ar' ? 'هدف متوسط الاستجابة (دقيقة)' : 'Avg response target (min)'}
-              </span>
-              {isManagerRole ? (
-                <>
-                  <input
-                    type="number"
-                    min={0}
-                    value={targetInput}
-                    onChange={(e) => setTargetInput(e.target.value)}
-                    placeholder="—"
-                    className="w-20 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white outline-none"
-                  />
-                  <button
-                    onClick={async () => {
-                      setSavingTarget(true);
-                      const res = await fetchWithAuth(`${API_URL}/reports/team-target`, {
-                        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ avg_response_min: targetInput }),
-                      });
-                      if (res.ok) setRespTarget(targetInput === '' ? null : Number(targetInput));
-                      setSavingTarget(false);
-                    }}
-                    disabled={savingTarget}
-                    className="px-3 py-1 rounded-lg bg-brand text-white text-xs font-black disabled:opacity-60"
-                  >
-                    {lang === 'ar' ? 'حفظ' : 'Save'}
-                  </button>
-                </>
-              ) : (
-                <span className="text-lg font-black text-brand">{respTarget != null ? `${respTarget}` : '—'}</span>
-              )}
+            <div className="flex flex-wrap items-center gap-2">
+              {[
+                { label: lang === 'ar' ? 'هدف الاستجابة (دقيقة)' : 'Resp target (min)', input: targetInput, setInput: setTargetInput, saving: savingTarget,
+                  save: async () => { setSavingTarget(true); const res = await fetchWithAuth(`${API_URL}/reports/team-target`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ avg_response_min: targetInput }) }); if (res.ok) setRespTarget(targetInput === '' ? null : Number(targetInput)); setSavingTarget(false); }, val: respTarget },
+                { label: lang === 'ar' ? 'هدف رد الشات (دقيقة)' : 'Chat target (min)', input: chatTargetInput, setInput: setChatTargetInput, saving: savingChatTarget, save: saveChatTarget, val: chatTarget },
+              ].map((t, i) => (
+                <div key={i} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+                  <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{t.label}</span>
+                  {isManagerRole ? (
+                    <>
+                      <input type="number" min={0} value={t.input} onChange={(e) => t.setInput(e.target.value)} placeholder="—"
+                        className="w-16 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white outline-none" />
+                      <button onClick={t.save} disabled={t.saving} className="px-3 py-1 rounded-lg bg-brand text-white text-xs font-black disabled:opacity-60">{lang === 'ar' ? 'حفظ' : 'Save'}</button>
+                    </>
+                  ) : (
+                    <span className="text-lg font-black text-brand">{t.val != null ? `${t.val}` : '—'}</span>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
 
           <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
-            <table className="w-full text-left border-collapse min-w-[700px]">
+            <table className="w-full text-left border-collapse min-w-[1100px]">
               <thead>
+                <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800">
+                  <th rowSpan={2} className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest align-bottom">{lang === 'ar' ? 'الموظف' : 'User'}</th>
+                  <th colSpan={5} className="px-4 md:px-6 pt-3 pb-1 text-[10px] font-black text-zinc-400 uppercase tracking-widest border-l border-zinc-100 dark:border-zinc-800">{lang === 'ar' ? 'معالجة الطلبات' : 'Request handling'}</th>
+                  <th colSpan={6} className="px-4 md:px-6 pt-3 pb-1 text-[10px] font-black text-brand uppercase tracking-widest border-l border-zinc-100 dark:border-zinc-800">{lang === 'ar' ? 'ردود الشات' : 'Invoice chat'}</th>
+                  <th rowSpan={2} className="px-4 md:px-6 py-3"></th>
+                </tr>
                 <tr className="bg-zinc-50 dark:bg-zinc-800/50">
-                  {['User', 'Processed', 'Approved', 'Rejected', 'Avg Resp (min)', 'Max Resp (min)'].map((h, i) => (
-                    <th key={i} className="px-6 md:px-8 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
+                  {[
+                    lang === 'ar' ? 'معالَجة' : 'Processed', lang === 'ar' ? 'موافقة' : 'Approved', lang === 'ar' ? 'رفض' : 'Rejected', lang === 'ar' ? 'متوسط' : 'Avg', lang === 'ar' ? 'أطول' : 'Max',
+                    lang === 'ar' ? 'ردود' : 'Replies', lang === 'ar' ? 'متوسط' : 'Avg', lang === 'ar' ? 'وسيط' : 'Median', lang === 'ar' ? 'أطول' : 'Max', lang === 'ar' ? 'ضمن الهدف' : 'Within', lang === 'ar' ? 'إزالة' : 'Dismissed',
+                  ].map((h, i) => (
+                    <th key={i} className={cn("px-4 md:px-6 pb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest", i === 0 || i === 5 ? "border-l border-zinc-100 dark:border-zinc-800" : "")}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
-                {teamReport.length > 0 ? teamReport.map((row, i) => {
-                  const overTarget = respTarget != null && row.avg_resp_min != null && row.avg_resp_min > respTarget;
-                  return (
-                    <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
-                      <td className="px-6 md:px-8 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.processed}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-emerald-600 tabular-nums">{row.approved}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-red-500 tabular-nums">{row.rejected}</td>
-                      <td className="px-6 md:px-8 py-5">
-                        <span className={cn(
-                          "px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
-                          respTarget == null ? "text-zinc-900 dark:text-white"
-                            : overTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20"
-                            : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20"
-                        )}>
-                          {row.avg_resp_min}
-                        </span>
-                      </td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_resp_min}</td>
-                    </tr>
-                  );
-                }) : (
-                  <tr><td colSpan={6} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
-                    {lang === 'ar' ? 'لا توجد بيانات للفلتر المحدد' : 'No data for the selected filters'}
-                  </td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-
-          {/* Invoice Chat — replies per employee (explicit replies) */}
-          <div className="space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
-                {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'Invoice Chat Replies'}
-              </h3>
-              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
-                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
-                  {lang === 'ar' ? 'هدف زمن الرد (دقيقة)' : 'Reply target (min)'}
-                </span>
-                {isManagerRole ? (
-                  <>
-                    <input type="number" min={0} value={chatTargetInput} onChange={(e) => setChatTargetInput(e.target.value)} placeholder="—"
-                      className="w-20 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white outline-none" />
-                    <button onClick={saveChatTarget} disabled={savingChatTarget} className="px-3 py-1 rounded-lg bg-brand text-white text-xs font-black disabled:opacity-60">
-                      {lang === 'ar' ? 'حفظ' : 'Save'}
-                    </button>
-                  </>
-                ) : (
-                  <span className="text-lg font-black text-brand">{chatTarget != null ? `${chatTarget}` : '—'}</span>
-                )}
-              </div>
-            </div>
-            <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
-              <table className="w-full text-left border-collapse min-w-[760px]">
-                <thead>
-                  <tr className="bg-zinc-50 dark:bg-zinc-800/50">
-                    {[
-                      lang === 'ar' ? 'الموظف' : 'User',
-                      lang === 'ar' ? 'عدد الردود' : 'Replies',
-                      lang === 'ar' ? 'متوسط (دقيقة)' : 'Avg (min)',
-                      lang === 'ar' ? 'وسيط' : 'Median',
-                      lang === 'ar' ? 'أطول' : 'Max',
-                      lang === 'ar' ? 'ضمن الهدف' : 'Within target',
-                      lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed',
-                      '',
-                    ].map((h, i) => (
-                      <th key={i} className="px-4 md:px-6 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
-                  {chatPerf.length > 0 ? chatPerf.map((row, i) => {
-                    const over = chatTarget != null && row.avg_reply_min != null && row.avg_reply_min > chatTarget;
+                {(() => {
+                  const map = new Map<number, any>();
+                  teamReport.forEach((r) => map.set(r.user_id, { ...r }));
+                  chatPerf.forEach((c) => {
+                    const e = map.get(c.user_id) || { user_id: c.user_id, username: c.username, processed: 0, approved: 0, rejected: 0, avg_resp_min: null, max_resp_min: null };
+                    Object.assign(e, { replies: c.replies, avg_reply_min: c.avg_reply_min, median_reply_min: c.median_reply_min, max_reply_min: c.max_reply_min, within_target: c.within_target, dismissals: c.dismissals });
+                    map.set(c.user_id, e);
+                  });
+                  const merged = Array.from(map.values()).sort((a, b) => (b.processed || 0) - (a.processed || 0) || (b.replies || 0) - (a.replies || 0));
+                  if (merged.length === 0) {
+                    return <tr><td colSpan={13} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">{lang === 'ar' ? 'لا توجد بيانات للفلتر المحدد' : 'No data for the selected filters'}</td></tr>;
+                  }
+                  return merged.map((row, i) => {
+                    const overResp = respTarget != null && row.avg_resp_min != null && row.avg_resp_min > respTarget;
+                    const overReply = chatTarget != null && row.avg_reply_min != null && row.avg_reply_min > chatTarget;
                     const withinPct = (row.within_target != null && row.replies > 0) ? Math.round((row.within_target / row.replies) * 100) : null;
                     const expanded = expandedChatUser === row.user_id;
                     return (
                       <React.Fragment key={i}>
                         <tr className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
-                          <td className="px-4 md:px-6 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
-                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.replies}</td>
+                          <td className="px-4 md:px-6 py-5 font-black text-zinc-900 dark:text-white whitespace-nowrap">{row.username}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums border-l border-zinc-50 dark:border-zinc-800/50">{row.processed ?? 0}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-emerald-600 tabular-nums">{row.approved ?? 0}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-red-500 tabular-nums">{row.rejected ?? 0}</td>
                           <td className="px-4 md:px-6 py-5">
                             <span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
-                              row.avg_reply_min == null ? "text-zinc-400" : chatTarget == null ? "text-zinc-900 dark:text-white"
-                                : over ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                              row.avg_resp_min == null ? "text-zinc-400" : respTarget == null ? "text-zinc-900 dark:text-white" : overResp ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                              {row.avg_resp_min ?? '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_resp_min ?? '—'}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums border-l border-zinc-50 dark:border-zinc-800/50">{row.replies ?? 0}</td>
+                          <td className="px-4 md:px-6 py-5">
+                            <span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
+                              row.avg_reply_min == null ? "text-zinc-400" : chatTarget == null ? "text-zinc-900 dark:text-white" : overReply ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
                               {row.avg_reply_min ?? '—'}
                             </span>
                           </td>
@@ -899,15 +844,17 @@ export default function AnalyticsView() {
                               : <span className={withinPct >= 80 ? "text-emerald-600" : withinPct >= 50 ? "text-amber-600" : "text-red-500"}>{withinPct}%</span>}
                           </td>
                           <td className="px-4 md:px-6 py-5 font-bold text-zinc-500 tabular-nums">{row.dismissals || 0}</td>
-                          <td className="px-4 md:px-6 py-5">
-                            <button onClick={() => loadChatLog(row.user_id)} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline">
-                              {expanded ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}
-                            </button>
+                          <td className="px-4 md:px-6 py-5 text-right">
+                            {(row.replies || 0) > 0 && (
+                              <button onClick={() => loadChatLog(row.user_id)} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline whitespace-nowrap">
+                                {expanded ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}
+                              </button>
+                            )}
                           </td>
                         </tr>
                         {expanded && (
                           <tr>
-                            <td colSpan={8} className="px-4 md:px-6 pb-5 bg-zinc-50/40 dark:bg-zinc-800/20">
+                            <td colSpan={13} className="px-4 md:px-6 pb-5 bg-zinc-50/40 dark:bg-zinc-800/20">
                               {chatLogLoading ? (
                                 <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
                               ) : chatLog.length === 0 ? (
@@ -918,7 +865,7 @@ export default function AnalyticsView() {
                                     <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
                                       <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
                                       <span className="text-zinc-400">·</span>
-                                      <span className="text-zinc-500 truncate max-w-[200px]">{l.original_comment || (l.original_has_image ? '📷' : '')} → {l.reply_comment || (l.reply_has_image ? '📷' : '')}</span>
+                                      <span className="text-zinc-500 truncate max-w-[260px]">{l.original_comment || (l.original_has_image ? '📷' : '')} → {l.reply_comment || (l.reply_has_image ? '📷' : '')}</span>
                                       <span className="ml-auto text-zinc-400">{formatDate(l.reply_at)}</span>
                                       <span className={cn("px-2 py-0.5 rounded-md font-black tabular-nums",
                                         chatTarget != null && l.response_minutes > chatTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
@@ -933,14 +880,10 @@ export default function AnalyticsView() {
                         )}
                       </React.Fragment>
                     );
-                  }) : (
-                    <tr><td colSpan={8} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
-                      {lang === 'ar' ? 'لا توجد ردود للفلتر المحدد' : 'No replies for the selected filters'}
-                    </td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+                  });
+                })()}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
