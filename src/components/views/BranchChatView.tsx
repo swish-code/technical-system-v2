@@ -222,11 +222,11 @@ export default function BranchChatView() {
               </div>
             )}
             <div className="flex items-center gap-2">
-              <label className="cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'الكاميرا' : 'Camera'}>
+              <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'الكاميرا' : 'Camera'}>
                 <Camera size={20} />
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={pickFile} />
               </label>
-              <label className="cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة' : 'Attach image'}>
+              <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة' : 'Attach image'}>
                 <Paperclip size={20} />
                 <input type="file" accept="image/*" className="hidden" onChange={pickFile} />
               </label>
@@ -236,9 +236,9 @@ export default function BranchChatView() {
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
                 placeholder={lang === 'ar' ? 'اكتب تعليقًا...' : 'Write a comment...'}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
+                className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
               />
-              <button onClick={send} disabled={sending || (!comment.trim() && !image)} className="p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
+              <button onClick={send} disabled={sending || (!comment.trim() && !image)} className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
                 <Send size={20} />
               </button>
             </div>
