@@ -370,7 +370,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="h-screen h-[100dvh] overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex transition-colors duration-500">
+    <div style={{ height: '100dvh' }} className="h-screen overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex transition-colors duration-500">
       <NotificationManager />
 
       {/* Persistent Alarms Section */}
@@ -569,7 +569,7 @@ export default function Dashboard() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 flex flex-col h-screen h-[100dvh] overflow-hidden relative">
+      <main style={{ height: '100dvh' }} className="flex-1 flex flex-col h-screen overflow-hidden relative">
         <header className="bg-white/80 dark:bg-zinc-900/80 backdrop-blur-xl border-b border-zinc-200 dark:border-zinc-800 px-6 lg:px-10 py-5 flex items-center justify-between z-40">
           <div className="flex items-center gap-4 lg:gap-6">
             {/* Mobile Menu Toggle */}
