@@ -178,6 +178,12 @@ export default function AnalyticsView() {
   const [chatPerf, setChatPerf] = useState<any[]>([]);
   const [respTarget, setRespTarget] = useState<number | null>(null);
   const [targetInput, setTargetInput] = useState('');
+  const [chatTarget, setChatTarget] = useState<number | null>(null);
+  const [chatTargetInput, setChatTargetInput] = useState('');
+  const [savingChatTarget, setSavingChatTarget] = useState(false);
+  const [expandedChatUser, setExpandedChatUser] = useState<number | null>(null);
+  const [chatLog, setChatLog] = useState<any[]>([]);
+  const [chatLogLoading, setChatLogLoading] = useState(false);
   const [savingTarget, setSavingTarget] = useState(false);
   const isManagerRole = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   
@@ -235,7 +241,7 @@ export default function AnalyticsView() {
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
-      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes] = await Promise.all([
+      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
@@ -245,11 +251,17 @@ export default function AnalyticsView() {
         fetchWithAuth(`${API_URL}/reports/user-activity-details?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/team-performance?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/team-target`),
-        fetchWithAuth(`${API_URL}/reports/chat-performance?${queryParams.toString()}`)
+        fetchWithAuth(`${API_URL}/reports/chat-performance?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/chat-target`)
       ]);
 
       if (teamRes.ok) setTeamReport(await teamRes.json());
-      if (chatRes.ok) setChatPerf(await chatRes.json());
+      if (chatRes.ok) { setChatPerf(await chatRes.json()); setExpandedChatUser(null); }
+      if (chatTargetRes.ok) {
+        const d = await chatTargetRes.json();
+        setChatTarget(d?.reply_min ?? null);
+        setChatTargetInput(d?.reply_min != null ? String(d.reply_min) : '');
+      }
       if (targetRes.ok) {
         const data = await targetRes.json();
         setRespTarget(data?.avg_response_min ?? null);
@@ -321,6 +333,34 @@ export default function AnalyticsView() {
     } finally {
       setLoading(false);
     }
+  };
+
+  // Drill-down: load (or toggle) a single employee's reply log honoring filters.
+  const loadChatLog = async (userId: number) => {
+    if (expandedChatUser === userId) { setExpandedChatUser(null); return; }
+    setExpandedChatUser(userId);
+    setChatLog([]);
+    setChatLogLoading(true);
+    try {
+      const qp = new URLSearchParams();
+      if (filters.branch !== 'all') qp.append('branch_id', filters.branch);
+      if (filters.brand !== 'all') qp.append('brand_id', filters.brand);
+      if (filters.startDate) qp.append('startDate', filters.startDate);
+      if (filters.endDate) qp.append('endDate', filters.endDate);
+      qp.append('user_id', String(userId));
+      const res = await fetchWithAuth(`${API_URL}/reports/chat-reply-log?${qp.toString()}`);
+      setChatLog(res.ok ? await res.json() : []);
+    } catch { setChatLog([]); } finally { setChatLogLoading(false); }
+  };
+
+  const saveChatTarget = async () => {
+    setSavingChatTarget(true);
+    const res = await fetchWithAuth(`${API_URL}/reports/chat-target`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reply_min: chatTargetInput }),
+    });
+    if (res.ok) setChatTarget(chatTargetInput === '' ? null : Number(chatTargetInput));
+    setSavingChatTarget(false);
   };
 
   useEffect(() => {
@@ -794,35 +834,107 @@ export default function AnalyticsView() {
             </table>
           </div>
 
-          {/* Invoice Chat — replies per employee */}
+          {/* Invoice Chat — replies per employee (explicit replies) */}
           <div className="space-y-3">
-            <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
-              {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'Invoice Chat Replies'}
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
+                {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'Invoice Chat Replies'}
+              </h3>
+              <div className="flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800">
+                <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                  {lang === 'ar' ? 'هدف زمن الرد (دقيقة)' : 'Reply target (min)'}
+                </span>
+                {isManagerRole ? (
+                  <>
+                    <input type="number" min={0} value={chatTargetInput} onChange={(e) => setChatTargetInput(e.target.value)} placeholder="—"
+                      className="w-20 px-2 py-1 rounded-lg bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 text-sm font-black text-zinc-900 dark:text-white outline-none" />
+                    <button onClick={saveChatTarget} disabled={savingChatTarget} className="px-3 py-1 rounded-lg bg-brand text-white text-xs font-black disabled:opacity-60">
+                      {lang === 'ar' ? 'حفظ' : 'Save'}
+                    </button>
+                  </>
+                ) : (
+                  <span className="text-lg font-black text-brand">{chatTarget != null ? `${chatTarget}` : '—'}</span>
+                )}
+              </div>
+            </div>
             <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
-              <table className="w-full text-left border-collapse min-w-[500px]">
+              <table className="w-full text-left border-collapse min-w-[760px]">
                 <thead>
                   <tr className="bg-zinc-50 dark:bg-zinc-800/50">
                     {[
                       lang === 'ar' ? 'الموظف' : 'User',
                       lang === 'ar' ? 'عدد الردود' : 'Replies',
-                      lang === 'ar' ? 'متوسط دقائق الرد' : 'Avg Reply (min)',
-                      lang === 'ar' ? 'أطول رد (دقيقة)' : 'Max Reply (min)',
+                      lang === 'ar' ? 'متوسط (دقيقة)' : 'Avg (min)',
+                      lang === 'ar' ? 'وسيط' : 'Median',
+                      lang === 'ar' ? 'أطول' : 'Max',
+                      lang === 'ar' ? 'ضمن الهدف' : 'Within target',
+                      lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed',
+                      '',
                     ].map((h, i) => (
-                      <th key={i} className="px-6 md:px-8 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
+                      <th key={i} className="px-4 md:px-6 py-5 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
-                  {chatPerf.length > 0 ? chatPerf.map((row, i) => (
-                    <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
-                      <td className="px-6 md:px-8 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.replies}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-brand tabular-nums">{row.avg_reply_min}</td>
-                      <td className="px-6 md:px-8 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_reply_min}</td>
-                    </tr>
-                  )) : (
-                    <tr><td colSpan={4} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
+                  {chatPerf.length > 0 ? chatPerf.map((row, i) => {
+                    const over = chatTarget != null && row.avg_reply_min != null && row.avg_reply_min > chatTarget;
+                    const withinPct = (row.within_target != null && row.replies > 0) ? Math.round((row.within_target / row.replies) * 100) : null;
+                    const expanded = expandedChatUser === row.user_id;
+                    return (
+                      <React.Fragment key={i}>
+                        <tr className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
+                          <td className="px-4 md:px-6 py-5 font-black text-zinc-900 dark:text-white">{row.username}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.replies}</td>
+                          <td className="px-4 md:px-6 py-5">
+                            <span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
+                              row.avg_reply_min == null ? "text-zinc-400" : chatTarget == null ? "text-zinc-900 dark:text-white"
+                                : over ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                              {row.avg_reply_min ?? '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.median_reply_min ?? '—'}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_reply_min ?? '—'}</td>
+                          <td className="px-4 md:px-6 py-5 font-bold tabular-nums">
+                            {withinPct == null ? <span className="text-zinc-400">—</span>
+                              : <span className={withinPct >= 80 ? "text-emerald-600" : withinPct >= 50 ? "text-amber-600" : "text-red-500"}>{withinPct}%</span>}
+                          </td>
+                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-500 tabular-nums">{row.dismissals || 0}</td>
+                          <td className="px-4 md:px-6 py-5">
+                            <button onClick={() => loadChatLog(row.user_id)} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline">
+                              {expanded ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}
+                            </button>
+                          </td>
+                        </tr>
+                        {expanded && (
+                          <tr>
+                            <td colSpan={8} className="px-4 md:px-6 pb-5 bg-zinc-50/40 dark:bg-zinc-800/20">
+                              {chatLogLoading ? (
+                                <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
+                              ) : chatLog.length === 0 ? (
+                                <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد ردود' : 'No replies'}</p>
+                              ) : (
+                                <div className="space-y-1.5 pt-3 max-h-72 overflow-y-auto">
+                                  {chatLog.map((l, j) => (
+                                    <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                                      <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                                      <span className="text-zinc-400">·</span>
+                                      <span className="text-zinc-500 truncate max-w-[200px]">{l.original_comment || (l.original_has_image ? '📷' : '')} → {l.reply_comment || (l.reply_has_image ? '📷' : '')}</span>
+                                      <span className="ml-auto text-zinc-400">{formatDate(l.reply_at)}</span>
+                                      <span className={cn("px-2 py-0.5 rounded-md font-black tabular-nums",
+                                        chatTarget != null && l.response_minutes > chatTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                                        {l.response_minutes} {lang === 'ar' ? 'د' : 'min'}
+                                      </span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
+                    );
+                  }) : (
+                    <tr><td colSpan={8} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
                       {lang === 'ar' ? 'لا توجد ردود للفلتر المحدد' : 'No replies for the selected filters'}
                     </td></tr>
                   )}

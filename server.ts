@@ -6987,68 +6987,128 @@ async function startServer() {
   });
 
   // Per-employee chat reply performance (replies sent + avg reply minutes).
-  app.get("/api/reports/chat-performance", authenticate, authorize(["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"]), async (req, res) => {
-    const reqUser = (req as any).user;
-    let { startDate, endDate, brand_id, branch_id, role, user_id, period } = req.query as any;
-
+  // Shared filter builder for chat KPI queries (brand/branch + role + user + date).
+  const buildChatFilters = (q: any, reqUser: any, msgAlias: string, senderCol: string, dateCol: string) => {
+    let { startDate, endDate, brand_id, branch_id, role, user_id, period } = q;
     const managerRoles = ["Manager", "Super Visor", "Operation Manager"];
     if (!managerRoles.includes(reqUser.role_name)) user_id = String(reqUser.id);
-
-    // Brand/branch scope the pairing CTE (pairing is per-branch, so this is safe).
-    const cteParams: any[] = [];
-    const cteConds: string[] = [];
-    if (brand_id) { cteConds.push(`bm.brand_id = $${cteParams.length + 1}`); cteParams.push(brand_id); }
-    if (branch_id) { cteConds.push(`bm.branch_id = $${cteParams.length + 1}`); cteParams.push(branch_id); }
-    const cteWhere = cteConds.length ? `WHERE ${cteConds.join(' AND ')}` : '';
-
-    // Role / user / date filter the replies themselves (outer query).
-    const params = [...cteParams];
-    const outer: string[] = [];
     const hasUser = user_id && user_id !== 'all';
-    if (role && role !== 'all') {
-      outer.push(`ro.name = $${params.length + 1}`); params.push(role);
-    } else if (!hasUser) {
-      // No specific user/role → show employees only (exclude restaurant users).
-      outer.push(`ro.name <> 'Restaurants'`);
-    }
-    if (hasUser) { outer.push(`r.sender_id = $${params.length + 1}`); params.push(user_id); }
-
-    const rDate = "(r.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date";
+    const conds: string[] = [];
+    const params: any[] = [];
+    if (brand_id) { conds.push(`${msgAlias}.brand_id = $${params.length + 1}`); params.push(brand_id); }
+    if (branch_id) { conds.push(`${msgAlias}.branch_id = $${params.length + 1}`); params.push(branch_id); }
+    if (role && role !== 'all') { conds.push(`ro.name = $${params.length + 1}`); params.push(role); }
+    else if (!hasUser) { conds.push(`ro.name <> 'Restaurants'`); }
+    if (hasUser) { conds.push(`${senderCol} = $${params.length + 1}`); params.push(user_id); }
+    const d = `(${dateCol} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date`;
     const today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date";
-    if (startDate) { outer.push(`${rDate} >= $${params.length + 1}`); params.push(startDate); }
-    if (endDate) { outer.push(`${rDate} <= $${params.length + 1}`); params.push(endDate); }
+    if (startDate) { conds.push(`${d} >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conds.push(`${d} <= $${params.length + 1}`); params.push(endDate); }
     if (!startDate && !endDate) {
-      if (period === 'today') outer.push(`${rDate} = ${today}`);
-      else if (period === 'week') outer.push(`${rDate} >= ${today} - INTERVAL '7 days'`);
-      else if (period === 'month') outer.push(`${rDate} >= ${today} - INTERVAL '30 days'`);
+      if (period === 'today') conds.push(`${d} = ${today}`);
+      else if (period === 'week') conds.push(`${d} >= ${today} - INTERVAL '7 days'`);
+      else if (period === 'month') conds.push(`${d} >= ${today} - INTERVAL '30 days'`);
     }
+    return { conds, params };
+  };
 
-    const rows = await db.all(`
-      WITH ordered AS (
-        SELECT bm.sender_id, bm.created_at,
-          CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END AS side,
-          LAG(bm.created_at) OVER w AS prev_at,
-          LAG(CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END) OVER w AS prev_side
+  const CHAT_KPI_ROLES = ["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"];
+
+  app.get("/api/reports/chat-target", authenticate, async (_req, res) => {
+    const row = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;
+    res.json({ reply_min: row?.value != null ? Number(row.value) : null });
+  });
+
+  app.put("/api/reports/chat-target", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const { reply_min } = req.body;
+    const val = (reply_min === '' || reply_min == null) ? null : Number(reply_min);
+    await db.query(`
+      INSERT INTO performance_targets (metric, value, updated_by, updated_at)
+      VALUES ('chat_reply_min', $1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+    `, [val, (req as any).user.id]);
+    res.json({ success: true });
+  });
+
+  // Definition B: a "reply" is an office message that explicitly replies (reply_to_id)
+  // to a restaurant message. Per employee: count, avg/median/max minutes,
+  // within-target, and dismissals (handled without replying).
+  app.get("/api/reports/chat-performance", authenticate, authorize(CHAT_KPI_ROLES), async (req, res) => {
+    const reqUser = (req as any).user;
+
+    const tRow = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;
+    const target = tRow?.value != null ? Number(tRow.value) : null;
+
+    // Replies
+    const rf = buildChatFilters(req.query, reqUser, 'bm', 'bm.sender_id', 'bm.created_at');
+    const replyConds = [...rf.conds, `bm.sender_role <> 'Restaurants'`, `rm.sender_role = 'Restaurants'`];
+    const replyParams = [...rf.params];
+    let withinSelect = `, NULL::int AS within_target`;
+    if (target != null) { replyParams.push(target); withinSelect = `, COUNT(*) FILTER (WHERE r.resp_min <= $${replyParams.length})::int AS within_target`; }
+
+    const replyRows = await db.all(`
+      WITH r AS (
+        SELECT u.id AS uid, u.username,
+          EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60 AS resp_min
         FROM branch_messages bm
-        ${cteWhere}
-        WINDOW w AS (PARTITION BY bm.branch_id ORDER BY bm.created_at, bm.id)
-      ),
-      r AS (
-        SELECT sender_id, created_at, EXTRACT(EPOCH FROM (created_at - prev_at)) / 60 AS resp_min
-        FROM ordered WHERE prev_side IS NOT NULL AND prev_side <> side
+        JOIN branch_messages rm ON bm.reply_to_id = rm.id
+        JOIN users u ON bm.sender_id = u.id
+        JOIN roles ro ON u.role_id = ro.id
+        WHERE ${replyConds.join(' AND ')}
       )
-      SELECT u.id AS user_id, u.username,
+      SELECT r.uid AS user_id, r.username,
         COUNT(*)::int AS replies,
         ROUND(AVG(r.resp_min))::int AS avg_reply_min,
-        ROUND(MAX(r.resp_min))::int AS max_reply_min
-      FROM r
-      JOIN users u ON r.sender_id = u.id
-      JOIN roles ro ON u.role_id = ro.id
-      WHERE ${outer.join(' AND ')}
-      GROUP BY u.id, u.username
-      ORDER BY replies DESC
-    `, params);
+        ROUND(MAX(r.resp_min))::int AS max_reply_min,
+        ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY r.resp_min))::int AS median_reply_min
+        ${withinSelect}
+      FROM r GROUP BY r.uid, r.username
+    `, replyParams) as any[];
 
+    // Dismissals (handled without replying)
+    const df = buildChatFilters(req.query, reqUser, 'bm', 'bm.resolved_by', 'bm.resolved_at');
+    const dismissConds = [...df.conds, `bm.resolved_at IS NOT NULL`];
+    const dismissRows = await db.all(`
+      SELECT u.id AS user_id, u.username, COUNT(*)::int AS dismissals
+      FROM branch_messages bm
+      JOIN users u ON bm.resolved_by = u.id
+      JOIN roles ro ON u.role_id = ro.id
+      WHERE ${dismissConds.join(' AND ')}
+      GROUP BY u.id, u.username
+    `, df.params) as any[];
+
+    const map = new Map<number, any>();
+    for (const r of replyRows) map.set(r.user_id, { ...r, dismissals: 0 });
+    for (const d of dismissRows) {
+      const e = map.get(d.user_id);
+      if (e) e.dismissals = d.dismissals;
+      else map.set(d.user_id, { user_id: d.user_id, username: d.username, replies: 0, avg_reply_min: null, median_reply_min: null, max_reply_min: null, within_target: null, dismissals: d.dismissals });
+    }
+    const result = Array.from(map.values()).sort((a, b) => (b.replies - a.replies) || (b.dismissals - a.dismissals));
+    res.json(result);
+  });
+
+  // Drill-down: every explicit reply (with timestamps + gap) for the filtered scope.
+  app.get("/api/reports/chat-reply-log", authenticate, authorize(CHAT_KPI_ROLES), async (req, res) => {
+    const reqUser = (req as any).user;
+    const f = buildChatFilters(req.query, reqUser, 'bm', 'bm.sender_id', 'bm.created_at');
+    const conds = [...f.conds, `bm.sender_role <> 'Restaurants'`, `rm.sender_role = 'Restaurants'`];
+    const rows = await db.all(`
+      SELECT b.name AS brand_name, br.name AS branch_name,
+        ou.username AS original_username, rm.comment AS original_comment, (rm.image_url IS NOT NULL) AS original_has_image, rm.created_at AS original_at,
+        u.username AS reply_username, bm.comment AS reply_comment, (bm.image_url IS NOT NULL) AS reply_has_image, bm.created_at AS reply_at,
+        ROUND(EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60)::int AS response_minutes
+      FROM branch_messages bm
+      JOIN branch_messages rm ON bm.reply_to_id = rm.id
+      JOIN users u ON bm.sender_id = u.id
+      JOIN roles ro ON u.role_id = ro.id
+      JOIN users ou ON rm.sender_id = ou.id
+      JOIN brands b ON bm.brand_id = b.id
+      JOIN branches br ON bm.branch_id = br.id
+      WHERE ${conds.join(' AND ')}
+      ORDER BY bm.created_at DESC
+      LIMIT 300
+    `, f.params) as any[];
     res.json(rows);
   });
 
