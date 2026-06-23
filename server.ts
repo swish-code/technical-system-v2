@@ -780,6 +780,7 @@ async function initDb() {
     status TEXT DEFAULT 'pending',
     status_by INTEGER,
     status_at TIMESTAMP,
+    reply_to_id INTEGER,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     read_at TIMESTAMP,
     FOREIGN KEY (sender_id) REFERENCES users(id)
@@ -3335,6 +3336,7 @@ async function startServer() {
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status TEXT DEFAULT 'pending'"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_at TIMESTAMP"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN reply_to_id INTEGER"); } catch (e) {}
   try {
     // Who (which user) sent the office-side response, so the UI shows the real name.
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN responded_by INTEGER");
@@ -6762,10 +6764,17 @@ async function startServer() {
     const branch = await db.get("SELECT id, brand_id, name FROM branches WHERE id = $1", [branch_id]) as any;
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
+    // Quoted reply: only honor an id that belongs to this same branch thread.
+    let reply_to_id: number | null = req.body.reply_to_id ? Number(req.body.reply_to_id) : null;
+    if (reply_to_id) {
+      const parent = await db.get("SELECT id FROM branch_messages WHERE id = $1 AND branch_id = $2", [reply_to_id, branch.id]) as any;
+      if (!parent) reply_to_id = null;
+    }
+
     const ins = await db.query(`
-      INSERT INTO branch_messages (brand_id, branch_id, sender_id, sender_role, comment, image_url, image_type)
-      VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, created_at
-    `, [branch.brand_id, branch.id, user.id, user.role_name, comment, image_url, image_type]);
+      INSERT INTO branch_messages (brand_id, branch_id, sender_id, sender_role, comment, image_url, image_type, reply_to_id)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at
+    `, [branch.brand_id, branch.id, user.id, user.role_name, comment, image_url, image_type, reply_to_id]);
 
     try {
       const brand = await db.get("SELECT name FROM brands WHERE id = $1", [branch.brand_id]) as any;
@@ -6806,10 +6815,14 @@ async function startServer() {
 
     const msgs = await db.all(`
       SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type,
-             bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username
+             bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username,
+             bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
+             (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role
       FROM branch_messages bm
       JOIN users u ON bm.sender_id = u.id
       LEFT JOIN users su ON bm.status_by = su.id
+      LEFT JOIN branch_messages rm ON bm.reply_to_id = rm.id
+      LEFT JOIN users ru ON rm.sender_id = ru.id
       WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
     `, [branch_id]);
 

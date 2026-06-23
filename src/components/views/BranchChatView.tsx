@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -19,6 +19,11 @@ interface ChatMessage {
   status_by_name: string | null;
   created_at: string;
   username: string;
+  reply_to_id: number | null;
+  reply_username: string | null;
+  reply_comment: string | null;
+  reply_has_image: boolean;
+  reply_sender_role: string | null;
 }
 interface Thread {
   branch_id: number;
@@ -53,7 +58,21 @@ export default function BranchChatView() {
   const [image, setImage] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
+  const [flashId, setFlashId] = useState<number | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  // Jump to (and briefly flash) the original message a quote points at.
+  const jumpTo = (id: number) => {
+    const el = document.getElementById(`bchat-msg-${id}`);
+    if (el) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setFlashId(id);
+      setTimeout(() => setFlashId((cur) => (cur === id ? null : cur)), 1300);
+    }
+  };
+  const previewText = (comment: string | null, hasImage: boolean) =>
+    comment || (hasImage ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '');
 
   const fetchThreads = async () => {
     if (isRestaurant) return;
@@ -130,9 +149,10 @@ export default function BranchChatView() {
       fd.append('branch_id', String(branchId));
       if (comment.trim()) fd.append('comment', comment.trim());
       if (image) fd.append('image', image);
+      if (replyTo) fd.append('reply_to_id', String(replyTo.id));
       const res = await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
       if (res.ok) {
-        setComment(''); setImage(null); setImagePreview(null);
+        setComment(''); setImage(null); setImagePreview(null); setReplyTo(null);
         await fetchMessages(branchId);
         if (!isRestaurant) fetchThreads();
       }
@@ -184,15 +204,44 @@ export default function BranchChatView() {
             )}
             {messages.map((m) => {
               const mine = m.sender_id === user?.id;
+              const replyBtn = (
+                <button onClick={() => setReplyTo(m)} title={lang === 'ar' ? 'رد' : 'Reply'}
+                  className="shrink-0 self-center p-1 text-zinc-400 opacity-50 hover:opacity-100 hover:text-brand transition">
+                  <Reply size={15} />
+                </button>
+              );
               return (
-                <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
-                  <div className={cn(
-                    "max-w-[78%] rounded-2xl p-3 shadow-sm",
-                    mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white"
-                  )}>
+                <div key={m.id} className={cn("group flex items-center gap-1", mine ? "justify-end" : "justify-start")}>
+                  {mine && replyBtn}
+                  <div
+                    id={`bchat-msg-${m.id}`}
+                    className={cn(
+                      "max-w-[78%] rounded-2xl p-3 shadow-sm transition-all",
+                      mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
+                      flashId === m.id && "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-offset-zinc-900"
+                    )}>
                     <div className={cn("text-[10px] font-black uppercase tracking-widest mb-1 opacity-70")}>
                       {m.username} · {m.sender_role === 'Restaurants' ? (lang === 'ar' ? 'مطعم' : 'Restaurant') : (lang === 'ar' ? 'تكنيكال' : 'Tech')}
                     </div>
+
+                    {m.reply_to_id && (
+                      <button onClick={() => jumpTo(m.reply_to_id!)}
+                        className={cn(
+                          "w-full text-left flex gap-2 rounded-lg overflow-hidden mb-1.5",
+                          mine ? "bg-white/15 hover:bg-white/25" : "bg-black/5 dark:bg-white/10 hover:bg-black/10 dark:hover:bg-white/20"
+                        )}>
+                        <div className={cn("w-1 shrink-0", mine ? "bg-white/70" : "bg-brand")} />
+                        <div className="min-w-0 py-1 pr-2">
+                          <div className={cn("text-[10px] font-black truncate", mine ? "text-white/90" : "text-brand")}>
+                            {m.reply_username || (lang === 'ar' ? 'رسالة' : 'message')}
+                          </div>
+                          <div className={cn("text-[11px] truncate", mine ? "text-white/80" : "text-zinc-500 dark:text-zinc-400")}>
+                            {previewText(m.reply_comment, m.reply_has_image)}
+                          </div>
+                        </div>
+                      </button>
+                    )}
+
                     {m.image_url && (
                       <img
                         src={m.image_url}
@@ -208,6 +257,7 @@ export default function BranchChatView() {
                       {formatDate(m.created_at)}
                     </div>
                   </div>
+                  {!mine && replyBtn}
                 </div>
               );
             })}
@@ -216,6 +266,22 @@ export default function BranchChatView() {
 
           {/* Composer */}
           <div className="border-t border-zinc-100 dark:border-zinc-800 p-3">
+            {replyTo && (
+              <div className="flex items-center gap-2 mb-2 bg-zinc-50 dark:bg-zinc-800/50 rounded-xl overflow-hidden">
+                <div className="w-1 self-stretch bg-brand shrink-0" />
+                <div className="min-w-0 flex-1 py-1.5">
+                  <div className="text-xs font-black text-brand truncate">
+                    {lang === 'ar' ? 'ترد على' : 'Replying to'} {replyTo.username}
+                  </div>
+                  <div className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                    {previewText(replyTo.comment, !!replyTo.image_url)}
+                  </div>
+                </div>
+                <button onClick={() => setReplyTo(null)} className="shrink-0 p-2 text-zinc-400 hover:text-red-500" title={lang === 'ar' ? 'إلغاء' : 'Cancel'}>
+                  <X size={16} />
+                </button>
+              </div>
+            )}
             {imagePreview && (
               <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
                 <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
