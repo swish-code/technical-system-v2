@@ -49,17 +49,18 @@ export default function UserKPIView() {
   const [respTarget, setRespTarget] = useState<number | null>(null);
   const [chatSelf, setChatSelf] = useState<any | null>(null);
   const [chatTarget, setChatTarget] = useState<number | null>(null);
-  const [chatLog, setChatLog] = useState<any[]>([]);
-  const [chatLogOpen, setChatLogOpen] = useState(false);
-  const [chatLogLoading, setChatLogLoading] = useState(false);
+  const [drillType, setDrillType] = useState<'replies' | 'dismissed' | null>(null);
+  const [drillRows, setDrillRows] = useState<any[]>([]);
+  const [drillLoading, setDrillLoading] = useState(false);
 
-  const loadMyChatLog = async () => {
-    if (chatLogOpen) { setChatLogOpen(false); return; }
-    setChatLogOpen(true); setChatLog([]); setChatLogLoading(true);
+  const openMyDrill = async (type: 'replies' | 'dismissed') => {
+    if (drillType === type) { setDrillType(null); return; }
+    setDrillType(type); setDrillRows([]); setDrillLoading(true);
     try {
-      const res = await fetchWithAuth(`${API_URL}/reports/chat-reply-log?period=${period}`);
-      setChatLog(res.ok ? await res.json() : []);
-    } catch { setChatLog([]); } finally { setChatLogLoading(false); }
+      const endpoint = type === 'dismissed' ? 'chat-dismiss-log' : 'chat-reply-log';
+      const res = await fetchWithAuth(`${API_URL}/reports/${endpoint}?period=${period}`);
+      setDrillRows(res.ok ? await res.json() : []);
+    } catch { setDrillRows([]); } finally { setDrillLoading(false); }
   };
 
   const fetchData = async () => {
@@ -79,7 +80,7 @@ export default function UserKPIView() {
       if (detailsRes.ok) setUserActivityDetails(await detailsRes.json());
       if (teamRes.ok) { const rows = await teamRes.json(); setTeamSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
       if (targetRes.ok) { const d = await targetRes.json(); setRespTarget(d?.avg_response_min ?? null); }
-      if (chatRes.ok) { const rows = await chatRes.json(); setChatSelf(Array.isArray(rows) && rows.length ? rows[0] : null); setChatLogOpen(false); }
+      if (chatRes.ok) { const rows = await chatRes.json(); setChatSelf(Array.isArray(rows) && rows.length ? rows[0] : null); setDrillType(null); }
       if (chatTargetRes.ok) { const d = await chatTargetRes.json(); setChatTarget(d?.reply_min ?? null); }
     } catch (error: any) {
       if (error.isAuthError) return;
@@ -305,8 +306,8 @@ export default function UserKPIView() {
                     {lang === 'ar' ? 'الهدف' : 'Target'}: <span className="text-brand">{chatTarget} min</span>
                   </span>
                 )}
-                <button onClick={loadMyChatLog} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline">
-                  {chatLogOpen ? (lang === 'ar' ? 'إخفاء التفاصيل' : 'Hide details') : (lang === 'ar' ? 'عرض التفاصيل' : 'Show details')}
+                <button onClick={() => openMyDrill('replies')} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline">
+                  {drillType === 'replies' ? (lang === 'ar' ? 'إخفاء التفاصيل' : 'Hide details') : (lang === 'ar' ? 'عرض التفاصيل' : 'Show details')}
                 </button>
               </div>
             </div>
@@ -314,31 +315,44 @@ export default function UserKPIView() {
               {(() => {
                 const overAvg = chatTarget != null && chatSelf.avg_reply_min != null && chatSelf.avg_reply_min > chatTarget;
                 const withinPct = (chatSelf.within_target != null && chatSelf.replies > 0) ? Math.round((chatSelf.within_target / chatSelf.replies) * 100) : null;
+                const canDismiss = (chatSelf.dismissals || 0) > 0;
                 const cards = [
-                  { label: lang === 'ar' ? 'عدد الردود' : 'Replies', value: chatSelf.replies ?? 0, color: 'text-zinc-900 dark:text-white' },
-                  { label: lang === 'ar' ? 'متوسط (دقيقة)' : 'Avg (min)', value: chatSelf.avg_reply_min ?? '—', color: chatTarget == null ? 'text-brand' : overAvg ? 'text-red-500' : 'text-emerald-600' },
-                  { label: lang === 'ar' ? 'وسيط' : 'Median', value: chatSelf.median_reply_min ?? '—', color: 'text-zinc-900 dark:text-white' },
-                  { label: lang === 'ar' ? 'أطول' : 'Max', value: chatSelf.max_reply_min ?? '—', color: 'text-zinc-900 dark:text-white' },
-                  { label: lang === 'ar' ? 'ضمن الهدف' : 'Within target', value: withinPct == null ? '—' : `${withinPct}%`, color: withinPct == null ? 'text-zinc-400' : withinPct >= 80 ? 'text-emerald-600' : withinPct >= 50 ? 'text-amber-600' : 'text-red-500' },
-                  { label: lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed', value: chatSelf.dismissals ?? 0, color: 'text-zinc-500' },
+                  { label: lang === 'ar' ? 'عدد الردود' : 'Replies', value: chatSelf.replies ?? 0, color: 'text-zinc-900 dark:text-white', onClick: undefined as undefined | (() => void) },
+                  { label: lang === 'ar' ? 'متوسط (دقيقة)' : 'Avg (min)', value: chatSelf.avg_reply_min ?? '—', color: chatTarget == null ? 'text-brand' : overAvg ? 'text-red-500' : 'text-emerald-600', onClick: undefined },
+                  { label: lang === 'ar' ? 'وسيط' : 'Median', value: chatSelf.median_reply_min ?? '—', color: 'text-zinc-900 dark:text-white', onClick: undefined },
+                  { label: lang === 'ar' ? 'أطول' : 'Max', value: chatSelf.max_reply_min ?? '—', color: 'text-zinc-900 dark:text-white', onClick: undefined },
+                  { label: lang === 'ar' ? 'ضمن الهدف' : 'Within target', value: withinPct == null ? '—' : `${withinPct}%`, color: withinPct == null ? 'text-zinc-400' : withinPct >= 80 ? 'text-emerald-600' : withinPct >= 50 ? 'text-amber-600' : 'text-red-500', onClick: undefined },
+                  { label: lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed', value: chatSelf.dismissals ?? 0, color: 'text-zinc-500', onClick: canDismiss ? () => openMyDrill('dismissed') : undefined },
                 ];
                 return cards.map((c, i) => (
-                  <div key={i} className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800">
-                    <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}</p>
+                  <div key={i} onClick={c.onClick}
+                    className={cn("p-4 rounded-2xl bg-white dark:bg-zinc-900 border transition-all",
+                      c.onClick ? "cursor-pointer hover:border-brand/50" : "",
+                      c.onClick && drillType === 'dismissed' ? "border-brand/60 ring-1 ring-brand/30" : "border-zinc-100 dark:border-zinc-800")}>
+                    <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}{c.onClick ? ' ↗' : ''}</p>
                     <p className={cn("text-2xl font-black tabular-nums", c.color)}>{c.value}</p>
                   </div>
                 ));
               })()}
             </div>
-            {chatLogOpen && (
+            {drillType && (
               <div className="mt-4">
-                {chatLogLoading ? (
+                {drillLoading ? (
                   <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
-                ) : chatLog.length === 0 ? (
-                  <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد ردود' : 'No replies'}</p>
+                ) : drillRows.length === 0 ? (
+                  <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد بيانات' : 'No data'}</p>
                 ) : (
                   <div className="space-y-1.5 max-h-72 overflow-y-auto">
-                    {chatLog.map((l, j) => (
+                    {drillType === 'dismissed' ? drillRows.map((l, j) => (
+                      <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                        <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                        <span className="text-zinc-400">·</span>
+                        <span className="text-zinc-500">{l.sender_username}:</span>
+                        <span className="text-zinc-600 dark:text-zinc-300 truncate max-w-[220px]">{l.comment || (l.has_image ? '📷' : '')}</span>
+                        {l.resolve_reason && <span className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 truncate max-w-[160px]">{l.resolve_reason}</span>}
+                        <span className="ml-auto text-zinc-400">{formatDate(l.resolved_at)}</span>
+                      </div>
+                    )) : drillRows.map((l, j) => (
                       <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
                         <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
                         <span className="text-zinc-400">·</span>
