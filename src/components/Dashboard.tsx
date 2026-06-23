@@ -284,7 +284,11 @@ export default function Dashboard() {
     { id: 'users', label: t.users, icon: Users, roles: ["Manager", "Super Visor"] },
   ].filter(item => item.roles.includes(user?.role_name || ''));
 
-  const [activeTab, setActiveTab] = useState<string>(menuItems[0]?.id || 'products');
+  // Restaurants land on Invoice Chat by default; everyone else on their first menu item.
+  const defaultTab = (user?.role_name === 'Restaurants' && menuItems.some(m => m.id === 'branch_chat'))
+    ? 'branch_chat'
+    : (menuItems[0]?.id || 'products');
+  const [activeTab, setActiveTab] = useState<string>(defaultTab);
 
   useEffect(() => {
     if (activeTab && unreadCounts[activeTab] > 0) {
