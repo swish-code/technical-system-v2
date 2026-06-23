@@ -543,6 +543,40 @@ export default function AnalyticsView() {
     XLSX.utils.book_append_sheet(wb, actionDistWS, lang === 'ar' ? 'توزيع الإجراءات' : "Action Distribution");
     }
 
+    if (activeSubTab === 'team') {
+      const map = new Map<number, any>();
+      teamReport.forEach((r) => map.set(r.user_id, { ...r }));
+      chatPerf.forEach((c) => {
+        const e = map.get(c.user_id) || { user_id: c.user_id, username: c.username, processed: 0, approved: 0, rejected: 0, avg_resp_min: null, max_resp_min: null };
+        Object.assign(e, { replies: c.replies, avg_reply_min: c.avg_reply_min, median_reply_min: c.median_reply_min, max_reply_min: c.max_reply_min, within_target: c.within_target, dismissals: c.dismissals });
+        map.set(c.user_id, e);
+      });
+      const merged = Array.from(map.values()).sort((a, b) => (b.processed || 0) - (a.processed || 0) || (b.replies || 0) - (a.replies || 0));
+      const teamWS = XLSX.utils.json_to_sheet(merged.map((r) => {
+        const withinPct = (r.within_target != null && r.replies > 0) ? Math.round((r.within_target / r.replies) * 100) : null;
+        return {
+          [lang === 'ar' ? 'المستخدم' : 'User']: r.username,
+          [lang === 'ar' ? 'معالَجة' : 'Processed']: r.processed ?? 0,
+          [lang === 'ar' ? 'موافقة' : 'Approved']: r.approved ?? 0,
+          [lang === 'ar' ? 'رفض' : 'Rejected']: r.rejected ?? 0,
+          [lang === 'ar' ? 'متوسط الاستجابة (دقيقة)' : 'Avg Resp (min)']: r.avg_resp_min ?? '',
+          [lang === 'ar' ? 'أقصى استجابة (دقيقة)' : 'Max Resp (min)']: r.max_resp_min ?? '',
+          [lang === 'ar' ? 'ردود الشات' : 'Chat Replies']: r.replies ?? 0,
+          [lang === 'ar' ? 'متوسط رد الشات (دقيقة)' : 'Chat Avg (min)']: r.avg_reply_min ?? '',
+          [lang === 'ar' ? 'وسيط رد الشات (دقيقة)' : 'Chat Median (min)']: r.median_reply_min ?? '',
+          [lang === 'ar' ? 'أطول رد الشات (دقيقة)' : 'Chat Max (min)']: r.max_reply_min ?? '',
+          [lang === 'ar' ? 'ضمن الهدف %' : 'Within Target %']: withinPct == null ? '' : `${withinPct}%`,
+          [lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed']: r.dismissals ?? 0,
+        };
+      }));
+      XLSX.utils.book_append_sheet(wb, teamWS, lang === 'ar' ? 'أداء الفريق' : "Team Performance");
+    }
+
+    if (wb.SheetNames.length === 0) {
+      alert(lang === 'ar' ? 'لا توجد بيانات للتحميل' : 'No data to download');
+      return;
+    }
+
     const dateStr = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kuwait' });
     const tabLabel = activeSubTab.toUpperCase();
     XLSX.writeFile(wb, `Swish_Menu_${tabLabel}_Analytics_${dateStr}.xlsx`);
