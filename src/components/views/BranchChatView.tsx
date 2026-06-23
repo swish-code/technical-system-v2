@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -114,6 +114,12 @@ export default function BranchChatView() {
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
 
+  const pickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (f) { setImage(f); const r = new FileReader(); r.onloadend = () => setImagePreview(r.result as string); r.readAsDataURL(f); }
+    e.target.value = '';
+  };
+
   const send = async () => {
     if (!branchId || (!comment.trim() && !image) || sending) return;
     setSending(true);
@@ -216,13 +222,13 @@ export default function BranchChatView() {
               </div>
             )}
             <div className="flex items-center gap-2">
-              <label className="cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand">
+              <label className="cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'الكاميرا' : 'Camera'}>
+                <Camera size={20} />
+                <input type="file" accept="image/*" capture="environment" className="hidden" onChange={pickFile} />
+              </label>
+              <label className="cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة' : 'Attach image'}>
                 <Paperclip size={20} />
-                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) { setImage(f); const r = new FileReader(); r.onloadend = () => setImagePreview(r.result as string); r.readAsDataURL(f); }
-                  e.target.value = '';
-                }} />
+                <input type="file" accept="image/*" className="hidden" onChange={pickFile} />
               </label>
               <input
                 type="text"
