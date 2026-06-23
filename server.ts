@@ -4778,30 +4778,45 @@ async function startServer() {
       LEFT JOIN branches br ON u.branch_id = br.id
     `) as any[];
 
-    const usersWithDetails = [];
-    for (const user of users) {
-      const brands = await db.all(`
-        SELECT b.id, b.name 
-        FROM user_brands ub 
-        JOIN brands b ON ub.brand_id = b.id 
-        WHERE ub.user_id = $1
-      `, [user.id]) as { id: number, name: string }[];
+    // Batch-load multi-brand / multi-branch assignments in two queries instead
+    // of two queries per user (avoids N+1). Output shape is unchanged.
+    const brandRows = await db.all(`
+      SELECT ub.user_id, b.id, b.name
+      FROM user_brands ub JOIN brands b ON ub.brand_id = b.id
+      ORDER BY ub.user_id, b.id
+    `) as { user_id: number, id: number, name: string }[];
 
-      const branches = await db.all(`
-        SELECT b.id, b.name 
-        FROM user_branches ub 
-        JOIN branches b ON ub.branch_id = b.id 
-        WHERE ub.user_id = $1
-      `, [user.id]) as { id: number, name: string }[];
-      
-      usersWithDetails.push({
+    const branchRows = await db.all(`
+      SELECT ub.user_id, b.id, b.name
+      FROM user_branches ub JOIN branches b ON ub.branch_id = b.id
+      ORDER BY ub.user_id, b.id
+    `) as { user_id: number, id: number, name: string }[];
+
+    const groupByUser = (rows: { user_id: number, id: number, name: string }[]) => {
+      const map = new Map<number, { ids: number[], names: string[] }>();
+      for (const row of rows) {
+        let entry = map.get(row.user_id);
+        if (!entry) { entry = { ids: [], names: [] }; map.set(row.user_id, entry); }
+        entry.ids.push(row.id);
+        entry.names.push(row.name);
+      }
+      return map;
+    };
+
+    const brandsByUser = groupByUser(brandRows);
+    const branchesByUser = groupByUser(branchRows);
+
+    const usersWithDetails = users.map((user) => {
+      const brands = brandsByUser.get(user.id) || { ids: [], names: [] };
+      const branches = branchesByUser.get(user.id) || { ids: [], names: [] };
+      return {
         ...user,
-        brand_ids: brands.map(b => b.id),
-        brand_names: brands.map(b => b.name),
-        branch_ids: branches.map(b => b.id),
-        branch_names: branches.map(b => b.name)
-      });
-    }
+        brand_ids: brands.ids,
+        brand_names: brands.names,
+        branch_ids: branches.ids,
+        branch_names: branches.names,
+      };
+    });
 
     res.json(usersWithDetails);
   });
