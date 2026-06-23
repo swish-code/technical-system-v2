@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -24,6 +24,10 @@ interface ChatMessage {
   reply_comment: string | null;
   reply_has_image: boolean;
   reply_sender_role: string | null;
+  answered: boolean;
+  resolved_at: string | null;
+  resolve_reason: string | null;
+  resolved_by_name: string | null;
 }
 interface Thread {
   branch_id: number;
@@ -285,6 +289,34 @@ export default function BranchChatView() {
                       />
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
+
+                    {m.sender_role === 'Restaurants' && (() => {
+                      const onMine = mine; // restaurant viewing own (green) bubble
+                      if (m.answered) {
+                        return (
+                          <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
+                            onMine ? "text-white/90" : "text-emerald-600 dark:text-emerald-400")}>
+                            <CheckCheck size={13} /> {lang === 'ar' ? 'تم الرد' : 'Replied'}
+                          </div>
+                        );
+                      }
+                      if (m.resolved_at) {
+                        return (
+                          <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
+                            onMine ? "text-white/80" : "text-zinc-500 dark:text-zinc-400")}
+                            title={m.resolve_reason ? `${lang === 'ar' ? 'السبب' : 'Reason'}: ${m.resolve_reason}` : undefined}>
+                            <Check size={13} /> {lang === 'ar' ? 'تم بدون رد' : 'Dismissed'}
+                            {m.resolved_by_name ? ` · ${m.resolved_by_name}` : ''}
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className={cn("mt-1.5 inline-flex items-center gap-1 text-[10px] font-black",
+                          onMine ? "text-white/90" : "text-amber-600 dark:text-amber-400")}>
+                          <Clock3 size={13} /> {lang === 'ar' ? 'بانتظار الرد' : 'Awaiting reply'}
+                        </div>
+                      );
+                    })()}
 
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>
                       {formatDate(m.created_at)}

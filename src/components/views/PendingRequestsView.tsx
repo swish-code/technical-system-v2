@@ -31,7 +31,10 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   // Invoice-chat tickets (restaurant messages awaiting an office reply). Read-only,
   // independent from pending_requests.
   const [chatTickets, setChatTickets] = useState<any[]>([]);
-  
+  const [dismissTicket, setDismissTicket] = useState<any | null>(null);
+  const [dismissReason, setDismissReason] = useState('');
+  const [dismissing, setDismissing] = useState(false);
+
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
@@ -95,6 +98,18 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const openChat = (branchId: number) => {
     sessionStorage.setItem('open_chat_branch', String(branchId));
     window.dispatchEvent(new CustomEvent('open-branch-chat', { detail: branchId }));
+  };
+
+  const confirmDismiss = async () => {
+    if (!dismissTicket || dismissing) return;
+    setDismissing(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/branch-chat/${dismissTicket.id}/resolve`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: dismissReason.trim() || undefined }),
+      });
+      if (res.ok) { setDismissTicket(null); setDismissReason(''); await fetchTickets(); }
+    } catch { /* ignore */ } finally { setDismissing(false); }
   };
 
   useEffect(() => {
@@ -378,13 +393,23 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => openChat(t.branch_id)}
-                  className="shrink-0 flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all active:scale-95"
-                >
-                  <MessageSquare size={16} />
-                  {lang === 'en' ? 'Open & Reply' : 'فتح والرد'}
-                </button>
+                <div className="shrink-0 flex items-center gap-2">
+                  <button
+                    onClick={() => openChat(t.branch_id)}
+                    className="flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all active:scale-95"
+                  >
+                    <MessageSquare size={16} />
+                    {lang === 'en' ? 'Open & Reply' : 'فتح والرد'}
+                  </button>
+                  <button
+                    onClick={() => { setDismissTicket(t); setDismissReason(''); }}
+                    className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-xl font-bold text-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all active:scale-95"
+                    title={lang === 'en' ? 'Dismiss without replying' : 'إزالة دون رد'}
+                  >
+                    <X size={16} />
+                    {lang === 'en' ? 'Dismiss' : 'تم بدون رد'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -665,6 +690,45 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     </div>
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Dismiss ticket (clear without replying) */}
+      <AnimatePresence>
+        {dismissTicket && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              onClick={() => setDismissTicket(null)} className="absolute inset-0 bg-zinc-900/70 backdrop-blur-sm" />
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }}
+              className="relative bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-md border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-4">
+              <h3 className="text-xl font-black text-zinc-900 dark:text-white">
+                {lang === 'en' ? 'Dismiss without replying?' : 'إزالة دون رد؟'}
+              </h3>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 font-medium">
+                {lang === 'en'
+                  ? `Remove this ticket from ${dismissTicket.branch_name}. No reply is sent.`
+                  : `إزالة هذه التذكرة من ${dismissTicket.branch_name}. لن يُرسَل أي رد.`}
+              </p>
+              <textarea
+                value={dismissReason}
+                onChange={(e) => setDismissReason(e.target.value)}
+                placeholder={lang === 'en' ? 'Reason (optional)' : 'السبب (اختياري)'}
+                rows={2}
+                className="w-full px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white resize-none"
+              />
+              <div className="flex gap-3">
+                <button onClick={() => setDismissTicket(null)}
+                  className="flex-1 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-black hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all">
+                  {lang === 'en' ? 'Cancel' : 'إلغاء'}
+                </button>
+                <button onClick={confirmDismiss} disabled={dismissing}
+                  className="flex-1 py-2.5 rounded-xl bg-red-500 text-white font-black hover:bg-red-600 transition-all disabled:opacity-50 flex items-center justify-center gap-2">
+                  {dismissing ? <Loader2 size={18} className="animate-spin" /> : <X size={18} />}
+                  {lang === 'en' ? 'Dismiss' : 'إزالة'}
+                </button>
               </div>
             </motion.div>
           </div>
