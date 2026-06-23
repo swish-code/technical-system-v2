@@ -377,7 +377,7 @@ export default function BranchChatView() {
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   return (
-    <div className="max-w-[1200px] mx-auto flex flex-col gap-4 h-full min-h-0">
+    <div className="w-full max-w-[1200px] mx-auto flex flex-col gap-4 flex-1 min-h-0">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
