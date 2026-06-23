@@ -281,7 +281,7 @@ export default function BranchChatView() {
           <div className="flex items-center gap-2">
             <MessageSquare className="text-brand" size={24} />
             <h2 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
-              {lang === 'ar' ? 'مراسلات الفواتير' : 'Invoice Chat'}
+              {lang === 'ar' ? 'الشات' : 'Chat'}
             </h2>
           </div>
           <p className="text-zinc-500 font-medium text-sm">
