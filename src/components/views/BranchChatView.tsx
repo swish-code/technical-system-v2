@@ -74,6 +74,36 @@ export default function BranchChatView() {
   const previewText = (comment: string | null, hasImage: boolean) =>
     comment || (hasImage ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '');
 
+  // Swipe-to-reply (mobile): drag a bubble sideways to reply to it.
+  const swipe = useRef<{ x: number; y: number; el: HTMLElement; active: boolean; mine: boolean } | null>(null);
+  const onTouchStart = (e: React.TouchEvent, mine: boolean) => {
+    const t = e.touches[0];
+    swipe.current = { x: t.clientX, y: t.clientY, el: e.currentTarget as HTMLElement, active: false, mine };
+  };
+  const onTouchMove = (e: React.TouchEvent) => {
+    const s = swipe.current; if (!s) return;
+    const t = e.touches[0];
+    const dx = t.clientX - s.x, dy = t.clientY - s.y;
+    if (!s.active) {
+      if (Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) s.active = true;
+      else if (Math.abs(dy) > 10) { swipe.current = null; return; }
+      else return;
+    }
+    let d = s.mine ? Math.min(0, dx) : Math.max(0, dx);
+    d = Math.max(-80, Math.min(80, d));
+    s.el.style.transform = `translateX(${d}px)`;
+  };
+  const onTouchEnd = (e: React.TouchEvent, m: ChatMessage) => {
+    const s = swipe.current; if (!s) return;
+    const dx = (e.changedTouches[0]?.clientX ?? s.x) - s.x;
+    const el = s.el;
+    el.style.transition = 'transform 150ms';
+    el.style.transform = '';
+    setTimeout(() => { el.style.transition = ''; }, 170);
+    if (s.mine ? dx <= -55 : dx >= 55) setReplyTo(m);
+    swipe.current = null;
+  };
+
   const fetchThreads = async () => {
     if (isRestaurant) return;
     try {
@@ -206,8 +236,8 @@ export default function BranchChatView() {
               const mine = m.sender_id === user?.id;
               const replyBtn = (
                 <button onClick={() => setReplyTo(m)} title={lang === 'ar' ? 'رد' : 'Reply'}
-                  className="shrink-0 self-center p-1 text-zinc-400 opacity-50 hover:opacity-100 hover:text-brand transition">
-                  <Reply size={15} />
+                  className="shrink-0 self-center p-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand hover:bg-brand/10 transition">
+                  <Reply size={18} />
                 </button>
               );
               return (
@@ -215,8 +245,11 @@ export default function BranchChatView() {
                   {mine && replyBtn}
                   <div
                     id={`bchat-msg-${m.id}`}
+                    onTouchStart={(e) => onTouchStart(e, mine)}
+                    onTouchMove={onTouchMove}
+                    onTouchEnd={(e) => onTouchEnd(e, m)}
                     className={cn(
-                      "max-w-[78%] rounded-2xl p-3 shadow-sm transition-all",
+                      "max-w-[78%] rounded-2xl p-3 shadow-sm",
                       mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
                       flashId === m.id && "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-offset-zinc-900"
                     )}>
