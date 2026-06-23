@@ -781,6 +781,9 @@ async function initDb() {
     status_by INTEGER,
     status_at TIMESTAMP,
     reply_to_id INTEGER,
+    resolved_at TIMESTAMP,
+    resolved_by INTEGER,
+    resolve_reason TEXT,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     read_at TIMESTAMP,
     FOREIGN KEY (sender_id) REFERENCES users(id)
@@ -3337,6 +3340,9 @@ async function startServer() {
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN reply_to_id INTEGER"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_at TIMESTAMP"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_by INTEGER"); } catch (e) {}
+  try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolve_reason TEXT"); } catch (e) {}
   try {
     // Who (which user) sent the office-side response, so the UI shows the real name.
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN responded_by INTEGER");
@@ -6832,12 +6838,16 @@ async function startServer() {
       SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type,
              bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username,
              bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
-             (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role
+             (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role,
+             bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
+             EXISTS (SELECT 1 FROM branch_messages o WHERE o.branch_id = bm.branch_id
+                     AND o.sender_role <> 'Restaurants' AND o.created_at > bm.created_at) AS answered
       FROM branch_messages bm
       JOIN users u ON bm.sender_id = u.id
       LEFT JOIN users su ON bm.status_by = su.id
       LEFT JOIN branch_messages rm ON bm.reply_to_id = rm.id
       LEFT JOIN users ru ON rm.sender_id = ru.id
+      LEFT JOIN users reu ON bm.resolved_by = reu.id
       WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
     `, [branch_id]);
 
@@ -6881,6 +6891,7 @@ async function startServer() {
       JOIN branches br ON bm.branch_id = br.id
       JOIN users u ON bm.sender_id = u.id
       WHERE bm.sender_role = 'Restaurants'
+        AND bm.resolved_at IS NULL
         AND bm.created_at > COALESCE(
           (SELECT MAX(o.created_at) FROM branch_messages o
            WHERE o.branch_id = bm.branch_id AND o.sender_role <> 'Restaurants'),
@@ -6888,6 +6899,22 @@ async function startServer() {
       ORDER BY bm.created_at DESC
     `);
     res.json(rows);
+  });
+
+  // Office dismisses a restaurant message (clears the ticket without replying).
+  app.post("/api/branch-chat/:id/resolve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const user = (req as any).user;
+    const reason = (req.body?.reason || '').trim() || null;
+    const msg = await db.get("SELECT id, branch_id, sender_role FROM branch_messages WHERE id = $1", [req.params.id]) as any;
+    if (!msg) return res.status(404).json({ error: "Message not found" });
+    if (msg.sender_role !== 'Restaurants') return res.status(400).json({ error: "Only restaurant messages can be dismissed" });
+
+    await db.query(
+      "UPDATE branch_messages SET resolved_at = CURRENT_TIMESTAMP, resolved_by = $1, resolve_reason = $2 WHERE id = $3",
+      [user.id, reason, msg.id]
+    );
+    broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: msg.branch_id });
+    res.json({ success: true });
   });
 
   // The recipient (opposite side of the sender) approves/rejects a message.
