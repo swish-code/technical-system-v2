@@ -370,7 +370,7 @@ export default function Dashboard() {
   };
 
   return (
-    <div className="min-h-screen min-h-[100dvh] bg-zinc-50 dark:bg-zinc-950 flex transition-colors duration-500">
+    <div className="h-screen h-[100dvh] overflow-hidden bg-zinc-50 dark:bg-zinc-950 flex transition-colors duration-500">
       <NotificationManager />
 
       {/* Persistent Alarms Section */}
