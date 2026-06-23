@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, CheckCircle2, XCircle, Download, Search, Plus } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -131,17 +131,6 @@ export default function BranchChatView() {
     } catch (e) { /* ignore */ } finally { setSending(false); }
   };
 
-  // Recipient approves / rejects a message.
-  const act = async (id: number, status: 'approved' | 'rejected') => {
-    try {
-      const res = await fetchWithAuth(`${API_URL}/branch-chat/${id}/status`, {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ status }),
-      });
-      if (res.ok) await fetchMessages(branchId);
-    } catch (e) { /* ignore */ }
-  };
-
   // Manager-only: download the full chat log (who sent, when, reply, response time).
   const exportExcel = async () => {
     if (exporting) return;
@@ -205,37 +194,6 @@ export default function BranchChatView() {
                       />
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
-
-                    {/* Approve / Reject — shown to the recipient (opposite side) while pending */}
-                    {(() => {
-                      const canAct = isRestaurant ? m.sender_role !== 'Restaurants' : m.sender_role === 'Restaurants';
-                      const decided = m.status === 'approved' || m.status === 'rejected';
-                      if (decided) {
-                        return (
-                          <div className={cn(
-                            "mt-2 inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest",
-                            m.status === 'approved' ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" : "bg-red-500/15 text-red-500"
-                          )}>
-                            {m.status === 'approved' ? <CheckCircle2 size={12} /> : <XCircle size={12} />}
-                            {m.status === 'approved' ? (lang === 'ar' ? 'تمت الموافقة' : 'Approved') : (lang === 'ar' ? 'مرفوض' : 'Rejected')}
-                            {m.status_by_name ? ` · ${m.status_by_name}` : ''}
-                          </div>
-                        );
-                      }
-                      if (canAct) {
-                        return (
-                          <div className="mt-2 flex items-center gap-2">
-                            <button onClick={() => act(m.id, 'approved')} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-emerald-600">
-                              <CheckCircle2 size={12} /> {lang === 'ar' ? 'موافقة' : 'Approve'}
-                            </button>
-                            <button onClick={() => act(m.id, 'rejected')} className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-red-500 text-white text-[10px] font-black uppercase tracking-widest hover:bg-red-600">
-                              <XCircle size={12} /> {lang === 'ar' ? 'رفض' : 'Reject'}
-                            </button>
-                          </div>
-                        );
-                      }
-                      return null;
-                    })()}
 
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>
                       {formatDate(m.created_at)}
