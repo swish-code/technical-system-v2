@@ -112,7 +112,9 @@ export default function BranchChatView() {
     }
   }, [lastMessage]);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // Always land on the latest message (also after images load and grow the list).
+  const scrollToBottom = () => endRef.current?.scrollIntoView({ block: 'end' });
+  useEffect(() => { scrollToBottom(); }, [messages, branchId]);
 
   const pickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -166,7 +168,7 @@ export default function BranchChatView() {
   };
 
   const ChatPane = (
-    <div className="flex flex-col flex-1 min-h-[60vh] bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+    <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
       {!branchId ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
           <MessageSquare size={40} />
@@ -174,7 +176,7 @@ export default function BranchChatView() {
         </div>
       ) : (
         <>
-          <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
                 {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
@@ -197,6 +199,7 @@ export default function BranchChatView() {
                         alt="invoice"
                         className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
                         onClick={() => window.open(m.image_url!, '_blank')}
+                        onLoad={scrollToBottom}
                       />
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
@@ -275,7 +278,7 @@ export default function BranchChatView() {
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
 
   return (
-    <div className="max-w-[1200px] mx-auto space-y-6">
+    <div className="max-w-[1200px] mx-auto flex flex-col gap-4 h-full min-h-0">
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="space-y-1">
           <div className="flex items-center gap-2">
@@ -300,9 +303,9 @@ export default function BranchChatView() {
       {isRestaurant ? (
         ChatPane
       ) : (
-        <div className="flex flex-col lg:flex-row gap-6">
+        <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
           {/* Threads list */}
-          <div className="lg:w-80 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[72vh] overflow-y-auto space-y-2">
+          <div className="lg:w-80 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[40vh] lg:max-h-none lg:h-full overflow-y-auto space-y-2">
             <button onClick={() => setShowNew(true)}
               className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-brand text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
               <Plus size={16} />
