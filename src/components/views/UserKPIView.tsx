@@ -48,24 +48,39 @@ export default function UserKPIView() {
   const [teamSelf, setTeamSelf] = useState<any | null>(null);
   const [respTarget, setRespTarget] = useState<number | null>(null);
   const [chatSelf, setChatSelf] = useState<any | null>(null);
+  const [chatTarget, setChatTarget] = useState<number | null>(null);
+  const [chatLog, setChatLog] = useState<any[]>([]);
+  const [chatLogOpen, setChatLogOpen] = useState(false);
+  const [chatLogLoading, setChatLogLoading] = useState(false);
+
+  const loadMyChatLog = async () => {
+    if (chatLogOpen) { setChatLogOpen(false); return; }
+    setChatLogOpen(true); setChatLog([]); setChatLogLoading(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/reports/chat-reply-log?period=${period}`);
+      setChatLog(res.ok ? await res.json() : []);
+    } catch { setChatLog([]); } finally { setChatLogLoading(false); }
+  };
 
   const fetchData = async () => {
     setLoading(true);
 
     try {
-      const [kpiRes, detailsRes, teamRes, targetRes, chatRes] = await Promise.all([
+      const [kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/user-kpi?period=${period}`),
         fetchWithAuth(`${API_URL}/reports/user-activity-details?period=${period}`),
         fetchWithAuth(`${API_URL}/reports/team-performance?period=${period}`),
         fetchWithAuth(`${API_URL}/reports/team-target`),
-        fetchWithAuth(`${API_URL}/reports/chat-performance?period=${period}`)
+        fetchWithAuth(`${API_URL}/reports/chat-performance?period=${period}`),
+        fetchWithAuth(`${API_URL}/reports/chat-target`)
       ]);
 
       if (kpiRes.ok) setUserKpi(await kpiRes.json());
       if (detailsRes.ok) setUserActivityDetails(await detailsRes.json());
       if (teamRes.ok) { const rows = await teamRes.json(); setTeamSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
       if (targetRes.ok) { const d = await targetRes.json(); setRespTarget(d?.avg_response_min ?? null); }
-      if (chatRes.ok) { const rows = await chatRes.json(); setChatSelf(Array.isArray(rows) && rows.length ? rows[0] : null); }
+      if (chatRes.ok) { const rows = await chatRes.json(); setChatSelf(Array.isArray(rows) && rows.length ? rows[0] : null); setChatLogOpen(false); }
+      if (chatTargetRes.ok) { const d = await chatTargetRes.json(); setChatTarget(d?.reply_min ?? null); }
     } catch (error: any) {
       if (error.isAuthError) return;
       console.error("Error fetching user KPI:", error);
@@ -280,21 +295,65 @@ export default function UserKPIView() {
 
         {chatSelf && (
           <div className="mb-10 p-6 rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-zinc-50/50 dark:bg-zinc-800/30">
-            <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight mb-5">
-              {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'My Invoice Chat Replies'}
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-              {[
-                { label: lang === 'ar' ? 'عدد الردود' : 'Replies', value: chatSelf.replies, color: 'text-zinc-900 dark:text-white' },
-                { label: lang === 'ar' ? 'متوسط دقائق الرد' : 'Avg Reply (min)', value: chatSelf.avg_reply_min, color: 'text-brand' },
-                { label: lang === 'ar' ? 'أطول رد (دقيقة)' : 'Max Reply (min)', value: chatSelf.max_reply_min, color: 'text-zinc-900 dark:text-white' },
-              ].map((c, i) => (
-                <div key={i} className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800">
-                  <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}</p>
-                  <p className={cn("text-2xl font-black tabular-nums", c.color)}>{c.value}</p>
-                </div>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+              <h3 className="text-lg font-display font-black text-zinc-900 dark:text-white tracking-tight">
+                {lang === 'ar' ? 'ردود مراسلات الفواتير' : 'My Invoice Chat Replies'}
+              </h3>
+              <div className="flex items-center gap-3">
+                {chatTarget != null && (
+                  <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">
+                    {lang === 'ar' ? 'الهدف' : 'Target'}: <span className="text-brand">{chatTarget} min</span>
+                  </span>
+                )}
+                <button onClick={loadMyChatLog} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline">
+                  {chatLogOpen ? (lang === 'ar' ? 'إخفاء التفاصيل' : 'Hide details') : (lang === 'ar' ? 'عرض التفاصيل' : 'Show details')}
+                </button>
+              </div>
             </div>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+              {(() => {
+                const overAvg = chatTarget != null && chatSelf.avg_reply_min != null && chatSelf.avg_reply_min > chatTarget;
+                const withinPct = (chatSelf.within_target != null && chatSelf.replies > 0) ? Math.round((chatSelf.within_target / chatSelf.replies) * 100) : null;
+                const cards = [
+                  { label: lang === 'ar' ? 'عدد الردود' : 'Replies', value: chatSelf.replies ?? 0, color: 'text-zinc-900 dark:text-white' },
+                  { label: lang === 'ar' ? 'متوسط (دقيقة)' : 'Avg (min)', value: chatSelf.avg_reply_min ?? '—', color: chatTarget == null ? 'text-brand' : overAvg ? 'text-red-500' : 'text-emerald-600' },
+                  { label: lang === 'ar' ? 'وسيط' : 'Median', value: chatSelf.median_reply_min ?? '—', color: 'text-zinc-900 dark:text-white' },
+                  { label: lang === 'ar' ? 'أطول' : 'Max', value: chatSelf.max_reply_min ?? '—', color: 'text-zinc-900 dark:text-white' },
+                  { label: lang === 'ar' ? 'ضمن الهدف' : 'Within target', value: withinPct == null ? '—' : `${withinPct}%`, color: withinPct == null ? 'text-zinc-400' : withinPct >= 80 ? 'text-emerald-600' : withinPct >= 50 ? 'text-amber-600' : 'text-red-500' },
+                  { label: lang === 'ar' ? 'إزالة بدون رد' : 'Dismissed', value: chatSelf.dismissals ?? 0, color: 'text-zinc-500' },
+                ];
+                return cards.map((c, i) => (
+                  <div key={i} className="p-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800">
+                    <p className="text-[9px] font-black text-zinc-400 uppercase tracking-widest mb-1">{c.label}</p>
+                    <p className={cn("text-2xl font-black tabular-nums", c.color)}>{c.value}</p>
+                  </div>
+                ));
+              })()}
+            </div>
+            {chatLogOpen && (
+              <div className="mt-4">
+                {chatLogLoading ? (
+                  <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
+                ) : chatLog.length === 0 ? (
+                  <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد ردود' : 'No replies'}</p>
+                ) : (
+                  <div className="space-y-1.5 max-h-72 overflow-y-auto">
+                    {chatLog.map((l, j) => (
+                      <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                        <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                        <span className="text-zinc-400">·</span>
+                        <span className="text-zinc-500 truncate max-w-[220px]">{l.original_comment || (l.original_has_image ? '📷' : '')} → {l.reply_comment || (l.reply_has_image ? '📷' : '')}</span>
+                        <span className="ml-auto text-zinc-400">{formatDate(l.reply_at)}</span>
+                        <span className={cn("px-2 py-0.5 rounded-md font-black tabular-nums",
+                          chatTarget != null && l.response_minutes > chatTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                          {l.response_minutes} {lang === 'ar' ? 'د' : 'min'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         )}
 
