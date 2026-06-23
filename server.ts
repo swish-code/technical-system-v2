@@ -789,6 +789,7 @@ async function initDb() {
     FOREIGN KEY (sender_id) REFERENCES users(id)
   );
   CREATE INDEX IF NOT EXISTS idx_branch_messages_branch ON branch_messages(branch_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_branch_messages_branch_role ON branch_messages(branch_id, sender_role, created_at);
 
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
@@ -6797,6 +6798,9 @@ async function startServer() {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, created_at
     `, [branch.brand_id, branch.id, user.id, user.role_name, comment, image_url, image_type, reply_to_id]);
 
+    // Respond immediately; notifications/push run after (don't block the sender).
+    res.json({ id: ins.rows[0].id });
+
     try {
       const brand = await db.get("SELECT name FROM brands WHERE id = $1", [branch.brand_id]) as any;
       const label = `${brand?.name || ''} · ${branch.name}`;
@@ -6825,8 +6829,6 @@ async function startServer() {
       if (fromRestaurant) await sendPushToRoles(recipients, push);
       else await sendPushToRoles(["Restaurants"], push, branch.id);
     } catch (e) { console.error("branch-chat notify failed", e); }
-
-    res.json({ id: ins.rows[0].id });
   });
 
   app.get("/api/branch-chat", authenticate, authorize(CHAT_ROLES), async (req, res) => {
@@ -6835,14 +6837,18 @@ async function startServer() {
     if (!branch_id) return res.json([]);
 
     const msgs = await db.all(`
+      WITH lo AS (
+        SELECT MAX(created_at) AS t FROM branch_messages
+        WHERE branch_id = $1 AND sender_role <> 'Restaurants'
+      )
       SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type,
              bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username,
              bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
              (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role,
              bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
-             EXISTS (SELECT 1 FROM branch_messages o WHERE o.branch_id = bm.branch_id
-                     AND o.sender_role <> 'Restaurants' AND o.created_at > bm.created_at) AS answered
+             (bm.sender_role = 'Restaurants' AND lo.t IS NOT NULL AND bm.created_at < lo.t) AS answered
       FROM branch_messages bm
+      CROSS JOIN lo
       JOIN users u ON bm.sender_id = u.id
       LEFT JOIN users su ON bm.status_by = su.id
       LEFT JOIN branch_messages rm ON bm.reply_to_id = rm.id
@@ -6864,17 +6870,24 @@ async function startServer() {
 
   app.get("/api/branch-chat/threads", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
     const threads = await db.all(`
-      SELECT bm.branch_id, b.name AS brand_name, br.name AS branch_name,
-        MAX(bm.created_at) AS last_at,
-        COUNT(*) FILTER (WHERE bm.sender_role = 'Restaurants' AND bm.read_at IS NULL)::int AS unread,
-        (SELECT comment FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_comment,
-        (SELECT (image_url IS NOT NULL) FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_has_image,
-        (SELECT sender_role FROM branch_messages x WHERE x.branch_id = bm.branch_id ORDER BY x.created_at DESC, x.id DESC LIMIT 1) AS last_sender_role
-      FROM branch_messages bm
-      JOIN branches br ON bm.branch_id = br.id
-      JOIN brands b ON bm.brand_id = b.id
-      GROUP BY bm.branch_id, b.name, br.name
-      ORDER BY MAX(bm.created_at) DESC
+      WITH agg AS (
+        SELECT branch_id, brand_id,
+          MAX(created_at) AS last_at,
+          COUNT(*) FILTER (WHERE sender_role = 'Restaurants' AND read_at IS NULL)::int AS unread
+        FROM branch_messages GROUP BY branch_id, brand_id
+      ),
+      last_msg AS (
+        SELECT DISTINCT ON (branch_id) branch_id,
+          comment AS last_comment, (image_url IS NOT NULL) AS last_has_image, sender_role AS last_sender_role
+        FROM branch_messages ORDER BY branch_id, created_at DESC, id DESC
+      )
+      SELECT a.branch_id, b.name AS brand_name, br.name AS branch_name,
+        a.last_at, a.unread, lm.last_comment, lm.last_has_image, lm.last_sender_role
+      FROM agg a
+      JOIN branches br ON a.branch_id = br.id
+      JOIN brands b ON a.brand_id = b.id
+      LEFT JOIN last_msg lm ON lm.branch_id = a.branch_id
+      ORDER BY a.last_at DESC
     `);
     res.json(threads);
   });
@@ -6884,18 +6897,20 @@ async function startServer() {
   // Read-only — does not touch pending_requests or any existing data.
   app.get("/api/branch-chat/tickets", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
     const rows = await db.all(`
+      WITH last_office AS (
+        SELECT branch_id, MAX(created_at) AS t
+        FROM branch_messages WHERE sender_role <> 'Restaurants' GROUP BY branch_id
+      )
       SELECT bm.id, bm.brand_id, bm.branch_id, bm.comment, bm.image_url, bm.created_at, bm.sender_id,
         b.name AS brand_name, br.name AS branch_name, u.username
       FROM branch_messages bm
       JOIN brands b ON bm.brand_id = b.id
       JOIN branches br ON bm.branch_id = br.id
       JOIN users u ON bm.sender_id = u.id
+      LEFT JOIN last_office lf ON lf.branch_id = bm.branch_id
       WHERE bm.sender_role = 'Restaurants'
         AND bm.resolved_at IS NULL
-        AND bm.created_at > COALESCE(
-          (SELECT MAX(o.created_at) FROM branch_messages o
-           WHERE o.branch_id = bm.branch_id AND o.sender_role <> 'Restaurants'),
-          '-infinity'::timestamp)
+        AND (lf.t IS NULL OR bm.created_at > lf.t)
       ORDER BY bm.created_at DESC
     `);
     res.json(rows);
