@@ -181,9 +181,9 @@ export default function AnalyticsView() {
   const [chatTarget, setChatTarget] = useState<number | null>(null);
   const [chatTargetInput, setChatTargetInput] = useState('');
   const [savingChatTarget, setSavingChatTarget] = useState(false);
-  const [expandedChatUser, setExpandedChatUser] = useState<number | null>(null);
-  const [chatLog, setChatLog] = useState<any[]>([]);
-  const [chatLogLoading, setChatLogLoading] = useState(false);
+  const [expandedChat, setExpandedChat] = useState<{ userId: number, type: 'replies' | 'dismissed' } | null>(null);
+  const [drillRows, setDrillRows] = useState<any[]>([]);
+  const [drillLoading, setDrillLoading] = useState(false);
   const [savingTarget, setSavingTarget] = useState(false);
   const isManagerRole = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   
@@ -256,7 +256,7 @@ export default function AnalyticsView() {
       ]);
 
       if (teamRes.ok) setTeamReport(await teamRes.json());
-      if (chatRes.ok) { setChatPerf(await chatRes.json()); setExpandedChatUser(null); }
+      if (chatRes.ok) { setChatPerf(await chatRes.json()); setExpandedChat(null); }
       if (chatTargetRes.ok) {
         const d = await chatTargetRes.json();
         setChatTarget(d?.reply_min ?? null);
@@ -335,12 +335,12 @@ export default function AnalyticsView() {
     }
   };
 
-  // Drill-down: load (or toggle) a single employee's reply log honoring filters.
-  const loadChatLog = async (userId: number) => {
-    if (expandedChatUser === userId) { setExpandedChatUser(null); return; }
-    setExpandedChatUser(userId);
-    setChatLog([]);
-    setChatLogLoading(true);
+  // Drill-down: load (or toggle) an employee's reply log or dismiss log.
+  const openDrill = async (userId: number, type: 'replies' | 'dismissed') => {
+    if (expandedChat && expandedChat.userId === userId && expandedChat.type === type) { setExpandedChat(null); return; }
+    setExpandedChat({ userId, type });
+    setDrillRows([]);
+    setDrillLoading(true);
     try {
       const qp = new URLSearchParams();
       if (filters.branch !== 'all') qp.append('branch_id', filters.branch);
@@ -348,9 +348,10 @@ export default function AnalyticsView() {
       if (filters.startDate) qp.append('startDate', filters.startDate);
       if (filters.endDate) qp.append('endDate', filters.endDate);
       qp.append('user_id', String(userId));
-      const res = await fetchWithAuth(`${API_URL}/reports/chat-reply-log?${qp.toString()}`);
-      setChatLog(res.ok ? await res.json() : []);
-    } catch { setChatLog([]); } finally { setChatLogLoading(false); }
+      const endpoint = type === 'dismissed' ? 'chat-dismiss-log' : 'chat-reply-log';
+      const res = await fetchWithAuth(`${API_URL}/reports/${endpoint}?${qp.toString()}`);
+      setDrillRows(res.ok ? await res.json() : []);
+    } catch { setDrillRows([]); } finally { setDrillLoading(false); }
   };
 
   const saveChatTarget = async () => {
@@ -815,7 +816,8 @@ export default function AnalyticsView() {
                     const overResp = respTarget != null && row.avg_resp_min != null && row.avg_resp_min > respTarget;
                     const overReply = chatTarget != null && row.avg_reply_min != null && row.avg_reply_min > chatTarget;
                     const withinPct = (row.within_target != null && row.replies > 0) ? Math.round((row.within_target / row.replies) * 100) : null;
-                    const expanded = expandedChatUser === row.user_id;
+                    const repliesOpen = expandedChat?.userId === row.user_id && expandedChat.type === 'replies';
+                    const dismissOpen = expandedChat?.userId === row.user_id && expandedChat.type === 'dismissed';
                     return (
                       <React.Fragment key={i}>
                         <tr className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
@@ -843,25 +845,41 @@ export default function AnalyticsView() {
                             {withinPct == null ? <span className="text-zinc-400">—</span>
                               : <span className={withinPct >= 80 ? "text-emerald-600" : withinPct >= 50 ? "text-amber-600" : "text-red-500"}>{withinPct}%</span>}
                           </td>
-                          <td className="px-4 md:px-6 py-5 font-bold text-zinc-500 tabular-nums">{row.dismissals || 0}</td>
+                          <td className="px-4 md:px-6 py-5 tabular-nums">
+                            {(row.dismissals || 0) > 0 ? (
+                              <button onClick={() => openDrill(row.user_id, 'dismissed')}
+                                className={cn("px-2.5 py-1 rounded-lg text-xs font-black hover:underline", dismissOpen ? "bg-brand/10 text-brand" : "text-zinc-600 dark:text-zinc-300")}>
+                                {row.dismissals}
+                              </button>
+                            ) : <span className="font-bold text-zinc-400">0</span>}
+                          </td>
                           <td className="px-4 md:px-6 py-5 text-right">
                             {(row.replies || 0) > 0 && (
-                              <button onClick={() => loadChatLog(row.user_id)} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline whitespace-nowrap">
-                                {expanded ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}
+                              <button onClick={() => openDrill(row.user_id, 'replies')} className="text-[10px] font-black uppercase tracking-widest text-brand hover:underline whitespace-nowrap">
+                                {repliesOpen ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}
                               </button>
                             )}
                           </td>
                         </tr>
-                        {expanded && (
+                        {(repliesOpen || dismissOpen) && (
                           <tr>
                             <td colSpan={13} className="px-4 md:px-6 pb-5 bg-zinc-50/40 dark:bg-zinc-800/20">
-                              {chatLogLoading ? (
+                              {drillLoading ? (
                                 <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
-                              ) : chatLog.length === 0 ? (
-                                <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد ردود' : 'No replies'}</p>
+                              ) : drillRows.length === 0 ? (
+                                <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد بيانات' : 'No data'}</p>
                               ) : (
                                 <div className="space-y-1.5 pt-3 max-h-72 overflow-y-auto">
-                                  {chatLog.map((l, j) => (
+                                  {dismissOpen ? drillRows.map((l, j) => (
+                                    <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                                      <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                                      <span className="text-zinc-400">·</span>
+                                      <span className="text-zinc-500">{l.sender_username}:</span>
+                                      <span className="text-zinc-600 dark:text-zinc-300 truncate max-w-[260px]">{l.comment || (l.has_image ? '📷' : '')}</span>
+                                      {l.resolve_reason && <span className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 truncate max-w-[180px]">{l.resolve_reason}</span>}
+                                      <span className="ml-auto text-zinc-400">{formatDate(l.resolved_at)}</span>
+                                    </div>
+                                  )) : drillRows.map((l, j) => (
                                     <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
                                       <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
                                       <span className="text-zinc-400">·</span>

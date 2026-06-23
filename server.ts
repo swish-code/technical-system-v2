@@ -7112,6 +7112,28 @@ async function startServer() {
     res.json(rows);
   });
 
+  // Drill-down: the restaurant messages an employee dismissed (handled w/o reply).
+  app.get("/api/reports/chat-dismiss-log", authenticate, authorize(CHAT_KPI_ROLES), async (req, res) => {
+    const reqUser = (req as any).user;
+    const f = buildChatFilters(req.query, reqUser, 'bm', 'bm.resolved_by', 'bm.resolved_at');
+    const conds = [...f.conds, `bm.resolved_at IS NOT NULL`, `bm.sender_role = 'Restaurants'`];
+    const rows = await db.all(`
+      SELECT b.name AS brand_name, br.name AS branch_name,
+        ou.username AS sender_username, bm.comment, (bm.image_url IS NOT NULL) AS has_image, bm.created_at AS sent_at,
+        bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name
+      FROM branch_messages bm
+      JOIN users reu ON bm.resolved_by = reu.id
+      JOIN roles ro ON reu.role_id = ro.id
+      JOIN users ou ON bm.sender_id = ou.id
+      JOIN brands b ON bm.brand_id = b.id
+      JOIN branches br ON bm.branch_id = br.id
+      WHERE ${conds.join(' AND ')}
+      ORDER BY bm.resolved_at DESC
+      LIMIT 300
+    `, f.params) as any[];
+    res.json(rows);
+  });
+
   app.get("/api/export", authenticate, async (req, res) => {
     const products = await db.all(`
       SELECT p.id, b.name as brand, pc.code as product_code, p.created_at
