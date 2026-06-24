@@ -156,6 +156,17 @@ const getBrandRestriction = async (user: any) => {
   return null;
 };
 
+// Brand scope as an array of brand_ids for chat queries, or null = unrestricted
+// (e.g. Technical Back Office / unrestricted managers). An empty array means
+// the user is limited to no brands.
+const getAllowedBrandIds = async (user: any): Promise<number[] | null> => {
+  const restriction = await getBrandRestriction(user);
+  if (!restriction || restriction.type !== 'include') return null;
+  if (!restriction.brands.length) return [];
+  const rows = await db.all("SELECT id FROM brands WHERE name = ANY($1)", [restriction.brands]);
+  return rows.map((r: any) => r.id);
+};
+
 function getCurrentKuwaitTime() {
   return new Date().toISOString();
 }
@@ -6782,7 +6793,8 @@ async function startServer() {
   });
 
   // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
-  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"];
+  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  const CHAT_OFFICE_ROLES = ["Technical Back Office", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
 
   app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
     const user = (req as any).user;
@@ -6797,6 +6809,12 @@ async function startServer() {
 
     const branch = await db.get("SELECT id, brand_id, name FROM branches WHERE id = $1", [branch_id]) as any;
     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    // Brand-restricted office users (e.g. Area Manager) may only send to their brand.
+    if (!fromRestaurant) {
+      const allowed = await getAllowedBrandIds(user);
+      if (allowed !== null && !allowed.includes(branch.brand_id)) return res.status(403).json({ error: "Not allowed for this brand" });
+    }
 
     // Quoted reply: only honor an id that belongs to this same branch thread.
     let reply_to_id: number | null = req.body.reply_to_id ? Number(req.body.reply_to_id) : null;
@@ -6848,6 +6866,15 @@ async function startServer() {
     const branch_id = user.role_name === 'Restaurants' ? user.branch_id : (req.query.branch_id as string);
     if (!branch_id) return res.json([]);
 
+    // Office users with a brand restriction can only open their brand's threads.
+    if (user.role_name !== 'Restaurants') {
+      const allowed = await getAllowedBrandIds(user);
+      if (allowed !== null) {
+        const br = await db.get("SELECT brand_id FROM branches WHERE id = $1", [branch_id]) as any;
+        if (!br || !allowed.includes(br.brand_id)) return res.status(403).json({ error: "Not allowed for this brand" });
+      }
+    }
+
     const msgs = await db.all(`
       WITH lo AS (
         SELECT MAX(created_at) AS t FROM branch_messages
@@ -6880,18 +6907,26 @@ async function startServer() {
     res.json(msgs);
   });
 
-  app.get("/api/branch-chat/threads", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+  app.get("/api/branch-chat/threads", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
+    const allowed = await getAllowedBrandIds((req as any).user);
+    const params: any[] = [];
+    let brandFilter = '';
+    if (allowed !== null) {
+      if (allowed.length === 0) return res.json([]);
+      params.push(allowed);
+      brandFilter = `WHERE brand_id = ANY($1)`;
+    }
     const threads = await db.all(`
       WITH agg AS (
         SELECT branch_id, brand_id,
           MAX(created_at) AS last_at,
           COUNT(*) FILTER (WHERE sender_role = 'Restaurants' AND read_at IS NULL)::int AS unread
-        FROM branch_messages GROUP BY branch_id, brand_id
+        FROM branch_messages ${brandFilter} GROUP BY branch_id, brand_id
       ),
       last_msg AS (
         SELECT DISTINCT ON (branch_id) branch_id,
           comment AS last_comment, (image_url IS NOT NULL) AS last_has_image, sender_role AS last_sender_role
-        FROM branch_messages ORDER BY branch_id, created_at DESC, id DESC
+        FROM branch_messages ${brandFilter} ORDER BY branch_id, created_at DESC, id DESC
       )
       SELECT a.branch_id, b.name AS brand_name, br.name AS branch_name,
         a.last_at, a.unread, lm.last_comment, lm.last_has_image, lm.last_sender_role
@@ -6900,14 +6935,22 @@ async function startServer() {
       JOIN brands b ON a.brand_id = b.id
       LEFT JOIN last_msg lm ON lm.branch_id = a.branch_id
       ORDER BY a.last_at DESC
-    `);
+    `, params);
     res.json(threads);
   });
 
   // Open "tickets": restaurant messages not yet replied to by the office. A
   // ticket clears as soon as any office-side message is posted after it.
   // Read-only — does not touch pending_requests or any existing data.
-  app.get("/api/branch-chat/tickets", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+  app.get("/api/branch-chat/tickets", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
+    const allowed = await getAllowedBrandIds((req as any).user);
+    const params: any[] = [];
+    let brandCond = '';
+    if (allowed !== null) {
+      if (allowed.length === 0) return res.json([]);
+      params.push(allowed);
+      brandCond = ` AND bm.brand_id = ANY($1)`;
+    }
     const rows = await db.all(`
       WITH last_office AS (
         SELECT branch_id, MAX(created_at) AS t
@@ -6922,19 +6965,22 @@ async function startServer() {
       LEFT JOIN last_office lf ON lf.branch_id = bm.branch_id
       WHERE bm.sender_role = 'Restaurants'
         AND bm.resolved_at IS NULL
-        AND (lf.t IS NULL OR bm.created_at > lf.t)
+        AND (lf.t IS NULL OR bm.created_at > lf.t)${brandCond}
       ORDER BY bm.created_at DESC
-    `);
+    `, params);
     res.json(rows);
   });
 
   // Office dismisses a restaurant message (clears the ticket without replying).
-  app.post("/api/branch-chat/:id/resolve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+  app.post("/api/branch-chat/:id/resolve", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
     const user = (req as any).user;
     const reason = (req.body?.reason || '').trim() || null;
-    const msg = await db.get("SELECT id, branch_id, sender_role FROM branch_messages WHERE id = $1", [req.params.id]) as any;
+    const msg = await db.get("SELECT id, branch_id, brand_id, sender_role FROM branch_messages WHERE id = $1", [req.params.id]) as any;
     if (!msg) return res.status(404).json({ error: "Message not found" });
     if (msg.sender_role !== 'Restaurants') return res.status(400).json({ error: "Only restaurant messages can be dismissed" });
+
+    const allowedR = await getAllowedBrandIds(user);
+    if (allowedR !== null && !allowedR.includes(msg.brand_id)) return res.status(403).json({ error: "Not allowed for this brand" });
 
     await db.query(
       "UPDATE branch_messages SET resolved_at = CURRENT_TIMESTAMP, resolved_by = $1, resolve_reason = $2 WHERE id = $3",
@@ -6958,8 +7004,10 @@ async function startServer() {
     const senderIsRestaurant = msg.sender_role === 'Restaurants';
     if (isRestaurant) {
       if (senderIsRestaurant || msg.branch_id !== user.branch_id) return res.status(403).json({ error: "Not allowed" });
-    } else if (!senderIsRestaurant) {
-      return res.status(403).json({ error: "Not allowed" });
+    } else {
+      if (!senderIsRestaurant) return res.status(403).json({ error: "Not allowed" });
+      const allowedS = await getAllowedBrandIds(user);
+      if (allowedS !== null && !allowedS.includes(msg.brand_id)) return res.status(403).json({ error: "Not allowed for this brand" });
     }
 
     await db.query("UPDATE branch_messages SET status = $1, status_by = $2, status_at = CURRENT_TIMESTAMP WHERE id = $3", [status, user.id, msg.id]);

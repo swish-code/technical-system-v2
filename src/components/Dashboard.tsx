@@ -272,7 +272,7 @@ export default function Dashboard() {
     { id: 'hide_unhide', label: t.hideUnhide, icon: EyeOff, roles: ["Technical Back Office", "Manager", "Call Center", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"] },
     { id: 'hide_item_config', label: t.hideItemConfig, icon: Settings, roles: ["Manager"] },
     { id: 'late_orders', label: t.lateOrders, icon: Clock, roles: ["Call Center", "Restaurants", "Manager", "Technical Back Office", "Super Visor", "Area Manager", "Operation Manager"] },
-    { id: 'branch_chat', label: t.branchChat, icon: MessageSquare, roles: ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
+    { id: 'branch_chat', label: t.branchChat, icon: MessageSquare, roles: ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager", "Area Manager"] },
     { id: 'busy_periods', label: t.busyPeriods, icon: AlertCircle, roles: ["Technical Back Office", "Manager", "Restaurants", "Super Visor", "Call Center", "Area Manager", "Operation Manager"] },
     { id: 'requests_branch', label: t.requestsBranch, icon: Inbox, roles: ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'orders', label: t.orders, icon: FileText, roles: ["Restaurants"] },
