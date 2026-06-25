@@ -6108,15 +6108,18 @@ async function startServer() {
           // keep existing duration if the times can't be parsed
         }
       }
+      const newReason = (req.body.reason_category ?? record.reason_category);
+      const newResponsible = (req.body.responsible_party ?? record.responsible_party);
       await db.query(`
         UPDATE busy_period_records
-        SET start_time = $1, end_time = $2, total_duration = $3, total_duration_minutes = $4
-        WHERE id = $5
-      `, [newStart, newEnd, dur, durMin || 0, id]);
+        SET start_time = $1, end_time = $2, total_duration = $3, total_duration_minutes = $4,
+            reason_category = $5, responsible_party = $6
+        WHERE id = $7
+      `, [newStart, newEnd, dur, durMin || 0, newReason, newResponsible, id]);
 
       await logAction(user.id, "BUSY_EDIT", "busy_period_records", Number(id),
-        { start_time: record.start_time, end_time: record.end_time, total_duration: record.total_duration },
-        { start_time: newStart, end_time: newEnd, total_duration: dur });
+        { start_time: record.start_time, end_time: record.end_time, total_duration: record.total_duration, reason_category: record.reason_category, responsible_party: record.responsible_party },
+        { start_time: newStart, end_time: newEnd, total_duration: dur, reason_category: newReason, responsible_party: newResponsible });
 
       broadcast({ type: "BUSY_PERIOD_UPDATED" });
       return res.json({ success: true });
