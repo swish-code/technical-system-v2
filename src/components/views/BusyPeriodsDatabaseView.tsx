@@ -19,6 +19,10 @@ export default function BusyPeriodsDatabaseView() {
   const [editingRecord, setEditingRecord] = useState<BusyPeriodRecord | null>(null);
   const [editStartTime, setEditStartTime] = useState('');
   const [editEndTime, setEditEndTime] = useState('');
+  const [editReason, setEditReason] = useState('');
+  const [editResponsible, setEditResponsible] = useState('');
+  const [reasonOptions, setReasonOptions] = useState<{ id: number; name: string }[]>([]);
+  const [responsibleParties, setResponsibleParties] = useState<{ id: number; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
@@ -73,6 +77,17 @@ export default function BusyPeriodsDatabaseView() {
 
   useEffect(() => {
     fetchData();
+    // Options for the edit dropdowns (same source the busy form uses).
+    (async () => {
+      try {
+        const [rRes, pRes] = await Promise.all([
+          fetchWithAuth(`${API_URL}/busy-reasons`),
+          fetchWithAuth(`${API_URL}/busy-responsible`),
+        ]);
+        if (rRes.ok) setReasonOptions(await safeJson(rRes) || []);
+        if (pRes.ok) setResponsibleParties(await safeJson(pRes) || []);
+      } catch { /* ignore */ }
+    })();
   }, []);
 
   useEffect(() => {
@@ -145,7 +160,9 @@ export default function BusyPeriodsDatabaseView() {
           start_time: editStartTime,
           end_time: editEndTime,
           total_duration: formatted,
-          total_duration_minutes: minutes
+          total_duration_minutes: minutes,
+          reason_category: editReason,
+          responsible_party: editResponsible
         })
       });
       
@@ -216,7 +233,7 @@ export default function BusyPeriodsDatabaseView() {
       openStatus: "Open",
       noRecords: "No records found",
       loading: "Loading records...",
-      edit: "Edit End Time",
+      edit: "Edit Record",
       update: "Update",
       cancel: "Cancel"
     },
@@ -240,7 +257,7 @@ export default function BusyPeriodsDatabaseView() {
       openStatus: "مفتوح",
       noRecords: "لم يتم العثور على سجلات",
       loading: "جاري تحميل السجلات...",
-      edit: "تعديل وقت الانتهاء",
+      edit: "تعديل السجل",
       update: "تحديث",
       cancel: "إلغاء"
     }
@@ -429,6 +446,8 @@ export default function BusyPeriodsDatabaseView() {
                               setEditingRecord(record);
                               setEditStartTime(record.start_time);
                               setEditEndTime(record.end_time);
+                              setEditReason(record.reason_category || '');
+                              setEditResponsible(record.responsible_party || '');
                             }}
                             className="p-2.5 text-zinc-400 dark:text-zinc-600 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl transition-all"
                             title={t.edit}
@@ -572,6 +591,31 @@ export default function BusyPeriodsDatabaseView() {
                         <span className="font-black text-zinc-900 dark:text-white">{calculateDuration(editStartTime, editEndTime).formatted}</span>
                       </div>
                     )}
+                  </div>
+
+                  <div className="p-6 bg-zinc-50 dark:bg-zinc-800/50 rounded-3xl border border-zinc-100 dark:border-zinc-800 space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest ml-1">{t.reason}</label>
+                      <select
+                        className="w-full px-5 py-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                        value={editReason}
+                        onChange={(e) => setEditReason(e.target.value)}
+                      >
+                        {editReason && !reasonOptions.some(o => o.name === editReason) && <option value={editReason}>{editReason}</option>}
+                        {reasonOptions.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest ml-1">{t.responsible}</label>
+                      <select
+                        className="w-full px-5 py-4 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 focus:border-zinc-900 dark:focus:border-white outline-none transition-all font-bold text-zinc-900 dark:text-white"
+                        value={editResponsible}
+                        onChange={(e) => setEditResponsible(e.target.value)}
+                      >
+                        {editResponsible && !responsibleParties.some(o => o.name === editResponsible) && <option value={editResponsible}>{editResponsible}</option>}
+                        {responsibleParties.map(o => <option key={o.id} value={o.name}>{o.name}</option>)}
+                      </select>
+                    </div>
                   </div>
                 </div>
 
