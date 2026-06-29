@@ -60,6 +60,11 @@ interface HideReport {
   total_count: number;
 }
 
+interface BrandHidesToday {
+  brand_name: string;
+  today_count: number;
+}
+
 interface BusyReport {
   branch_name: string;
   total_instances: number;
@@ -104,6 +109,7 @@ export default function AnalyticsView() {
   const { fetchWithAuth } = useFetch();
   const [brandsReport, setBrandsReport] = useState<BrandReport[]>([]);
   const [hidesReport, setHidesReport] = useState<HideReport[]>([]);
+  const [brandHidesToday, setBrandHidesToday] = useState<BrandHidesToday[]>([]);
   const [busyReport, setBusyReport] = useState<BusyReport[]>([]);
   const [reasonsReport, setReasonsReport] = useState<ReasonReport[]>([]);
   const [timelineData, setTimelineData] = useState<TimelineData[]>([]);
@@ -241,9 +247,10 @@ export default function AnalyticsView() {
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
-      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes] = await Promise.all([
+      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes, brandHidesTodayRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/brand-hides-today?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/reasons?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/timeline?${queryParams.toString()}`),
@@ -287,6 +294,10 @@ export default function AnalyticsView() {
           total_count: Number(h.total_count || 0)
         })) : [];
         setHidesReport(formatted);
+      }
+      if (brandHidesTodayRes && brandHidesTodayRes.ok) {
+        const data = await brandHidesTodayRes.json();
+        setBrandHidesToday(Array.isArray(data) ? data.map((d: any) => ({ brand_name: d.brand_name, today_count: Number(d.today_count || 0) })) : []);
       }
       if (busyRes.ok) {
         const data = await busyRes.json();
@@ -1414,6 +1425,69 @@ export default function AnalyticsView() {
             </div>
           </motion.div>
         </div>
+      )}
+
+      {activeSubTab === 'hide' && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.15 }}
+          className="glass-card p-6 md:p-10 rounded-[2.5rem] md:rounded-[3rem] border border-zinc-100 dark:border-zinc-800 shadow-2xl shadow-zinc-900/5"
+        >
+          <div className="flex items-center gap-4 mb-8">
+            <div className="w-10 h-10 rounded-2xl bg-red-50 dark:bg-red-900/20 flex items-center justify-center text-red-500">
+              <EyeOff size={20} />
+            </div>
+            <div>
+              <h3 className="text-2xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
+                {lang === 'ar' ? 'العناصر المخفية اليوم' : 'Hidden Items Today'}
+              </h3>
+              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-0.5">
+                {lang === 'ar' ? 'إجمالي الإخفاءات لكل براند منذ بداية اليوم' : 'Total hides per brand since start of day (Kuwait time)'}
+              </p>
+            </div>
+          </div>
+          <div className="overflow-x-auto rounded-2xl border border-zinc-100 dark:border-zinc-800">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800">
+                  <th className="px-6 py-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'البراند' : 'Brand'}</th>
+                  <th className="px-6 py-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest text-right">{lang === 'ar' ? 'المخفية اليوم' : 'Hidden Today'}</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+                {brandHidesToday.length === 0 ? (
+                  <tr>
+                    <td colSpan={2} className="px-6 py-10 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">
+                      {lang === 'ar' ? 'لا توجد إخفاءات اليوم' : 'No hides today'}
+                    </td>
+                  </tr>
+                ) : brandHidesToday.map((row, i) => (
+                  <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30 transition-colors">
+                    <td className="px-6 py-4 font-black text-zinc-900 dark:text-white">{row.brand_name}</td>
+                    <td className="px-6 py-4 text-right">
+                      <span className={`px-3 py-1 rounded-xl text-sm font-black tabular-nums ${row.today_count > 0 ? 'bg-red-50 text-red-600 dark:bg-red-900/20' : 'text-zinc-400'}`}>
+                        {row.today_count}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+              {brandHidesToday.length > 0 && (
+                <tfoot>
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-t border-zinc-100 dark:border-zinc-800">
+                    <td className="px-6 py-4 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'الإجمالي' : 'Total'}</td>
+                    <td className="px-6 py-4 text-right">
+                      <span className="px-3 py-1 rounded-xl text-sm font-black tabular-nums bg-brand/10 text-brand">
+                        {brandHidesToday.reduce((acc, r) => acc + r.today_count, 0)}
+                      </span>
+                    </td>
+                  </tr>
+                </tfoot>
+              )}
+            </table>
+          </div>
+        </motion.div>
       )}
 
       {activeSubTab === 'busy' && (

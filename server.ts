@@ -6447,6 +6447,47 @@ async function startServer() {
     res.json(report);
   });
 
+
+  app.get("/api/reports/brand-hides-today", authenticate, async (req, res) => {
+    const { brand_id } = req.query;
+    let query = `
+      SELECT 
+        b.name as brand_name,
+        COUNT(hh.id) as today_count
+      FROM brands b
+      LEFT JOIN branches br ON br.brand_id = b.id
+      LEFT JOIN hide_history hh ON hh.branch_id = br.id 
+        AND hh.action = 'HIDE'
+        AND (hh.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date
+    `;
+    const params: any[] = [];
+    const conditions: string[] = [];
+
+    const user = (req as any).user;
+    if (user.role_name === 'Area Manager') {
+      const branchIds = await getBranchRestriction(user);
+      if (branchIds && branchIds.length > 0) {
+        const placeholders = branchIds.map((_, i) => `$${params.length + i + 1}`).join(',');
+        conditions.push(`br.id IN (${placeholders})`);
+        params.push(...branchIds);
+      } else {
+        conditions.push("1 = 0");
+      }
+    }
+    if (brand_id) {
+      conditions.push("b.id = $" + (params.length + 1));
+      params.push(brand_id);
+    }
+
+    if (conditions.length > 0) {
+      query += " WHERE " + conditions.join(" AND ");
+    }
+
+    query += " GROUP BY b.id, b.name ORDER BY today_count DESC, b.name ASC";
+    
+    const report = await db.all(query, params);
+    res.json(report);
+  });
   app.get("/api/reports/branch-busy", authenticate, async (req, res) => {
     const { branch_id, brand_id, date, period } = req.query;
     let query = `
