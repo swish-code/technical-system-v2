@@ -1443,7 +1443,7 @@ export default function AnalyticsView() {
                 {lang === 'ar' ? 'العناصر المخفية اليوم' : 'Hidden Items Today'}
               </h3>
               <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-0.5">
-                {lang === 'ar' ? 'إجمالي الإخفاءات لكل براند منذ بداية اليوم' : 'Total hides per brand since start of day (Kuwait time)'}
+                {lang === 'ar' ? 'عدد أصناف المنيو المُخفاة اليوم لكل براند (بتوقيت الكويت)' : 'Distinct menu items hidden today per brand (Kuwait time)'}
               </p>
             </div>
           </div>

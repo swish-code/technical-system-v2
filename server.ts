@@ -6451,9 +6451,9 @@ async function startServer() {
   app.get("/api/reports/brand-hides-today", authenticate, async (req, res) => {
     const { brand_id } = req.query;
     let query = `
-      SELECT 
+      SELECT
         b.name as brand_name,
-        COUNT(hh.id) as today_count
+        COUNT(DISTINCT hh.product_id) as today_count
       FROM brands b
       LEFT JOIN branches br ON br.brand_id = b.id
       LEFT JOIN hide_history hh ON hh.branch_id = br.id 
