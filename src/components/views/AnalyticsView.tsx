@@ -250,7 +250,6 @@ export default function AnalyticsView() {
       const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes, brandHidesTodayRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
-        fetchWithAuth(`${API_URL}/reports/brand-hides-today?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/reasons?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/timeline?${queryParams.toString()}`),
@@ -259,7 +258,8 @@ export default function AnalyticsView() {
         fetchWithAuth(`${API_URL}/reports/team-performance?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/team-target`),
         fetchWithAuth(`${API_URL}/reports/chat-performance?${queryParams.toString()}`),
-        fetchWithAuth(`${API_URL}/reports/chat-target`)
+        fetchWithAuth(`${API_URL}/reports/chat-target`),
+        fetchWithAuth(`${API_URL}/reports/brand-hides-today?${queryParams.toString()}`)
       ]);
 
       if (teamRes.ok) setTeamReport(await teamRes.json());
