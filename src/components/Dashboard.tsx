@@ -635,7 +635,7 @@ export default function Dashboard() {
                 stiffness: 260,
                 damping: 20
               }}
-              className="max-w-7xl mx-auto w-full"
+              className={`max-w-7xl mx-auto w-full ${activeTab === 'branch_chat' ? 'flex-1 min-h-0 flex flex-col' : ''}`}
             >
               {renderView()}
             </motion.div>
