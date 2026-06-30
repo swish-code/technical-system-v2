@@ -6837,8 +6837,8 @@ async function startServer() {
   });
 
   // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
-  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
-  const CHAT_OFFICE_ROLES = ["Technical Back Office", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  const CHAT_OFFICE_ROLES = ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
 
   app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
     const user = (req as any).user;
