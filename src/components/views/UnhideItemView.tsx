@@ -38,6 +38,7 @@ export default function UnhideItemView() {
   const [branchFilter, setBranchFilter] = useState('');
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [processing, setProcessing] = useState(false);
+  const [pendingUnhideIds, setPendingUnhideIds] = useState<number[]>([]);
   const [editingItem, setEditingItem] = useState<HiddenItem | null>(null);
   const [allBrands, setAllBrands] = useState<{ id: number; name: string }[]>([]);
   const [allBranches, setAllBranches] = useState<{ id: number; brand_id: number; name: string }[]>([]);
@@ -73,6 +74,11 @@ export default function UnhideItemView() {
       if (data.type === 'HIDDEN_ITEMS_UPDATED') {
         fetchData();
       }
+      // A request was created/approved/rejected elsewhere — refresh which items
+      // are awaiting approval so their badges stay in sync live.
+      if (data.type === 'PENDING_REQUEST_CREATED' || data.type === 'PENDING_REQUEST_UPDATED') {
+        fetchPendingUnhide();
+      }
     };
     return () => ws.close();
   }, []);
@@ -87,12 +93,20 @@ export default function UnhideItemView() {
       }
       const data = await safeJson(res);
       setRecords(Array.isArray(data) ? data : []);
+      fetchPendingUnhide();
     } catch (err: any) {
       if (err.isAuthError) return;
       console.error("Failed to fetch hidden items", err);
     } finally {
       setLoading(false);
     }
+  };
+
+  const fetchPendingUnhide = async () => {
+    try {
+      const res = await fetchWithAuth(`${API_URL}/hidden-items/pending-unhide`);
+      if (res.ok) { const d = await safeJson(res); setPendingUnhideIds(Array.isArray(d?.ids) ? d.ids : []); }
+    } catch { /* ignore */ }
   };
 
   const fetchInitialData = async () => {
@@ -173,8 +187,11 @@ export default function UnhideItemView() {
   }, [editForm.brand_id]);
 
   const handleUnhide = async (ids: number[]) => {
-    if (ids.length === 0) return;
-    setConfirmModal({ isOpen: true, ids });
+    // Skip items that already have a pending unhide request (blocks the per-row
+    // "Unhide Now" button as well as any stale bulk selection).
+    const eligible = ids.filter(id => !pendingUnhideIds.includes(id));
+    if (eligible.length === 0) return;
+    setConfirmModal({ isOpen: true, ids: eligible });
   };
 
   const executeBulkUnhide = async () => {
@@ -194,6 +211,15 @@ export default function UnhideItemView() {
         setSelectedIds([]);
         await fetchData();
         setConfirmModal({ isOpen: false, ids: [] });
+      } else if (res.status === 409) {
+        // Server rejected duplicates — the selected item(s) already have a
+        // pending unhide request. Refresh badges and tell the user.
+        setSelectedIds([]);
+        setConfirmModal({ isOpen: false, ids: [] });
+        await fetchData();
+        alert(lang === 'ar'
+          ? 'يوجد طلب إظهار قيد الانتظار لهذه الأصناف بالفعل.'
+          : 'A pending unhide request already exists for the selected item(s).');
       } else {
         const errorData = await safeJson(res);
         console.error(`Error: ${errorData?.error || 'Failed to unhide items'}`);
@@ -276,14 +302,16 @@ export default function UnhideItemView() {
   const branches = Array.isArray(records) ? Array.from(new Set(records.filter(r => brandFilter === '' || r.brand_name === brandFilter).map(r => r.branch_name || 'All Branches'))) : [];
 
   const toggleSelect = (id: number) => {
+    if (pendingUnhideIds.includes(id)) return; // already awaiting approval — can't re-request
     setSelectedIds(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
   };
 
   const handleSelectAll = () => {
-    if (selectedIds.length === filteredRecords.length && filteredRecords.length > 0) {
+    const selectable = filteredRecords.filter(r => !pendingUnhideIds.includes(r.id));
+    if (selectedIds.length === selectable.length && selectable.length > 0) {
       setSelectedIds([]);
     } else {
-      setSelectedIds(filteredRecords.map(r => r.id));
+      setSelectedIds(selectable.map(r => r.id));
     }
   };
 
@@ -540,8 +568,9 @@ export default function UnhideItemView() {
                         transition={{ delay: idx * 0.01 }}
                         className={cn(
                           "group transition-all cursor-pointer",
-                          selectedIds.includes(item.id) 
-                            ? "bg-blue-50/50 dark:bg-blue-900/10" 
+                          pendingUnhideIds.includes(item.id) && "opacity-60",
+                          selectedIds.includes(item.id)
+                            ? "bg-blue-50/50 dark:bg-blue-900/10"
                             : "bg-white dark:bg-zinc-900 hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
                         )}
                         onClick={() => toggleSelect(item.id)}
@@ -570,6 +599,11 @@ export default function UnhideItemView() {
                         <td className="px-8 py-5">
                           <div className="flex flex-col gap-1">
                             <span className="text-xs font-black text-zinc-900 dark:text-white">{highlightText(item.product_name, search)}</span>
+                            {pendingUnhideIds.includes(item.id) && (
+                              <span className="inline-flex items-center gap-1 self-start px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-[9px] font-black uppercase tracking-widest">
+                                <Clock size={10} /> {lang === 'ar' ? 'بانتظار الموافقة' : 'Pending approval'}
+                              </span>
+                            )}
                             {item.ingredients && (
                               <div className="flex items-center gap-1.5">
                                 <span className="text-[9px] font-black uppercase tracking-widest text-zinc-400 dark:text-zinc-500">Ingredients:</span>
@@ -679,6 +713,7 @@ export default function UnhideItemView() {
                     onClick={() => toggleSelect(item.id)}
                     className={cn(
                       "p-4 rounded-2xl border-2 transition-all space-y-4",
+                      pendingUnhideIds.includes(item.id) && "opacity-60",
                       selectedIds.includes(item.id)
                         ? "bg-blue-50/50 dark:bg-blue-900/10 border-blue-500/50"
                         : "bg-white dark:bg-zinc-900 border-zinc-100 dark:border-zinc-800"
@@ -699,6 +734,11 @@ export default function UnhideItemView() {
                         <div className="flex flex-col">
                           <span className="text-[10px] font-black text-zinc-400 uppercase tracking-widest">{item.brand_name}</span>
                           <span className="text-sm font-black text-zinc-900 dark:text-white">{item.product_name}</span>
+                          {pendingUnhideIds.includes(item.id) && (
+                            <span className="inline-flex items-center gap-1 self-start mt-1 px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 text-[9px] font-black uppercase tracking-widest">
+                              <Clock size={10} /> {lang === 'ar' ? 'بانتظار الموافقة' : 'Pending approval'}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div className="px-2 py-1 bg-zinc-100 dark:bg-zinc-800 rounded-lg">

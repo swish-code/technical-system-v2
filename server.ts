@@ -5895,6 +5895,20 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Hidden-item ids already covered by an open (Pending) unhide request. The Unhide
+  // view uses this to badge those items and block re-requesting the same item.
+  app.get("/api/hidden-items/pending-unhide", authenticate, async (_req, res) => {
+    const rows = await db.all(`
+      SELECT data::jsonb->'ids' AS ids FROM pending_requests
+      WHERE type = 'hide_unhide' AND status = 'Pending' AND data::jsonb->>'action' = 'UNHIDE'
+    `);
+    const idSet = new Set<number>();
+    for (const row of rows as any[]) {
+      for (const id of (row.ids || [])) idSet.add(Number(id));
+    }
+    res.json({ ids: Array.from(idSet) });
+  });
+
   app.post("/api/hidden-items/bulk-unhide", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Restaurants", "Area Manager", "Operation Manager"]), async (req, res) => {
     const { ids } = req.body;
     if (!Array.isArray(ids) || ids.length === 0) {
@@ -5903,39 +5917,63 @@ async function startServer() {
 
     if ((req as any).user.role_name === 'Restaurants' || (req as any).user.role_name === 'Area Manager') {
       const productNameFieldId = await getProductNameFieldId();
-      const resolvedProducts = await db.all(`
-        SELECT hi.id as hidden_item_id, hi.product_id, fv.value as name
-        FROM hidden_items hi
-        LEFT JOIN product_field_values fv ON hi.product_id = fv.product_id AND fv.field_id = $1
-        WHERE hi.id IN (${ids.map((_, i) => `$${i + 2}`).join(',')})
-      `, [productNameFieldId, ...ids]);
+      try {
+        const outcome = await db.transaction(async (client) => {
+          // Serialize this user's rapid submits so the duplicate check below can't
+          // be raced by a double-click firing two requests at the same instant.
+          await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`unhide_request_${(req as any).user.id}`]);
 
-      const result = await db.query(`
-        INSERT INTO pending_requests (user_id, type, data, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id
-      `, [
-        (req as any).user.id, 
-        'hide_unhide', 
-        JSON.stringify({ 
-          action: 'UNHIDE', 
-          ids, 
-          resolved_products: resolvedProducts 
-        }), 
-        getCurrentKuwaitTime(), 
-        getCurrentKuwaitTime()
-      ]);
-      
-      broadcast({ type: "PENDING_REQUEST_CREATED" });
-      const branchName = req.body.branch_name || "Unknown Branch";
-      sendSystemNotification(
-        "New Bulk Hide Request",
-        "طلب إخفاء متعدد جديد",
-        `New bulk hide request received from ${branchName}`,
-        `طلب إخفاء متعدد جديد مستلم من ${branchName}`,
-        ["Technical Back Office"]
-      );
-      return res.json({ id: result.rows[0].id, pending: true });
+          // Drop ids already covered by an open (Pending) unhide request.
+          const pendingRows = await client.query(`
+            SELECT data::jsonb->'ids' AS ids FROM pending_requests
+            WHERE type = 'hide_unhide' AND status = 'Pending' AND data::jsonb->>'action' = 'UNHIDE'
+          `);
+          const alreadyPending = new Set<number>();
+          for (const row of pendingRows.rows) {
+            for (const pid of (row.ids || [])) alreadyPending.add(Number(pid));
+          }
+          const newIds = (ids as any[]).filter((id) => !alreadyPending.has(Number(id)));
+          if (newIds.length === 0) throw new Error("DUPLICATE_REQUEST");
+
+          const resolvedProducts = (await client.query(`
+            SELECT hi.id as hidden_item_id, hi.product_id, fv.value as name
+            FROM hidden_items hi
+            LEFT JOIN product_field_values fv ON hi.product_id = fv.product_id AND fv.field_id = $1
+            WHERE hi.id IN (${newIds.map((_, i) => `$${i + 2}`).join(',')})
+          `, [productNameFieldId, ...newIds])).rows;
+
+          const inserted = await client.query(`
+            INSERT INTO pending_requests (user_id, type, data, created_at, updated_at)
+            VALUES ($1, $2, $3, $4, $5)
+            RETURNING id
+          `, [
+            (req as any).user.id,
+            'hide_unhide',
+            JSON.stringify({ action: 'UNHIDE', ids: newIds, resolved_products: resolvedProducts }),
+            getCurrentKuwaitTime(),
+            getCurrentKuwaitTime()
+          ]);
+          return { id: inserted.rows[0].id, created: newIds.length, skipped: (ids as any[]).length - newIds.length };
+        });
+
+        broadcast({ type: "PENDING_REQUEST_CREATED" });
+        broadcast({ type: "HIDDEN_ITEMS_UPDATED" });
+        const branchName = req.body.branch_name || "Unknown Branch";
+        sendSystemNotification(
+          "New Bulk Hide Request",
+          "طلب إخفاء متعدد جديد",
+          `New bulk hide request received from ${branchName}`,
+          `طلب إخفاء متعدد جديد مستلم من ${branchName}`,
+          ["Technical Back Office"]
+        );
+        return res.json({ id: outcome.id, pending: true, created: outcome.created, skipped: outcome.skipped });
+      } catch (err: any) {
+        if (err.message === "DUPLICATE_REQUEST") {
+          return res.status(409).json({ error: "DUPLICATE_REQUEST", message: "A pending unhide request already exists for the selected item(s)." });
+        }
+        console.error("bulk-unhide request failed", err);
+        return res.status(500).json({ error: "Failed to submit unhide request" });
+      }
     }
 
     await db.transaction(async (client) => {
