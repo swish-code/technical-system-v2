@@ -40,6 +40,27 @@ interface Thread {
   last_sender_role: string | null;
 }
 
+// Human-readable role labels for chat bubbles / Excel export. Falls back to the
+// raw role_name for any role not listed. The stored sender_role is unchanged;
+// this only affects display (previously every non-Restaurant role showed "Tech").
+const ROLE_LABELS: Record<string, { ar: string; en: string }> = {
+  'Restaurants': { ar: 'مطعم', en: 'Restaurant' },
+  'Call Center': { ar: 'كول سنتر', en: 'Call Center' },
+  'Technical Back Office': { ar: 'باك أوفيس', en: 'Back Office' },
+  'Technical Team': { ar: 'تكنيكال', en: 'Tech' },
+  'Manager': { ar: 'مدير', en: 'Manager' },
+  'Super Visor': { ar: 'مشرف', en: 'Supervisor' },
+  'Operation Manager': { ar: 'مدير عمليات', en: 'Operation Manager' },
+  'Area Manager': { ar: 'مدير منطقة', en: 'Area Manager' },
+  'Marketing Team': { ar: 'ماركتنج', en: 'Marketing' },
+  'Coding Team': { ar: 'كودينج', en: 'Coding' },
+};
+const roleLabel = (role: string | null | undefined, lang: string) => {
+  if (!role) return lang === 'ar' ? 'تكنيكال' : 'Tech';
+  const entry = ROLE_LABELS[role];
+  return entry ? (lang === 'ar' ? entry.ar : entry.en) : role;
+};
+
 export default function BranchChatView() {
   const { user, lang } = useAuth();
   const { fetchWithAuth } = useFetch();
@@ -206,7 +227,7 @@ export default function BranchChatView() {
         Branch: r.branch_name,
         'Sent At': formatDate(r.created_at),
         'Sender': r.username,
-        'Role': r.sender_role === 'Restaurants' ? 'Restaurant' : 'Technical',
+        'Role': roleLabel(r.sender_role, 'en'),
         'Message': r.comment || '',
         'Image': r.has_image ? 'Yes' : 'No',
         'Status': r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1) : 'Pending',
@@ -258,7 +279,7 @@ export default function BranchChatView() {
                       flashId === m.id && "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-offset-zinc-900"
                     )}>
                     <div className={cn("text-[10px] font-black uppercase tracking-widest mb-1 opacity-70")}>
-                      {m.username} · {m.sender_role === 'Restaurants' ? (lang === 'ar' ? 'مطعم' : 'Restaurant') : (lang === 'ar' ? 'تكنيكال' : 'Tech')}
+                      {m.username} · {roleLabel(m.sender_role, lang)}
                     </div>
 
                     {m.reply_to_id && (
