@@ -802,6 +802,16 @@ async function initDb() {
   CREATE INDEX IF NOT EXISTS idx_branch_messages_branch ON branch_messages(branch_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_branch_messages_branch_role ON branch_messages(branch_id, sender_role, created_at);
 
+  -- Per-user, per-branch "last read" marker: each user's own independent unread
+  -- state in chat. (branch_messages.read_at stays as the shared "the other side
+  -- saw it" flag that powers the Seen receipts — the two are separate concerns.)
+  CREATE TABLE IF NOT EXISTS branch_reads (
+    user_id INTEGER NOT NULL,
+    branch_id INTEGER NOT NULL,
+    last_read_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, branch_id)
+  );
+
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -871,6 +881,21 @@ async function initDb() {
   CREATE INDEX IF NOT EXISTS idx_hide_history_timestamp ON hide_history(timestamp DESC);
   CREATE INDEX IF NOT EXISTS idx_branches_brand ON branches(brand_id);
 `);
+
+  // One-time backfill so switching to per-user chat unread doesn't flood everyone
+  // with old threads shown as unread. Seeds every existing (user, branch) pair to
+  // "read now" — but only while branch_reads is still empty (first boot post-deploy).
+  try {
+    await db.query(`
+      INSERT INTO branch_reads (user_id, branch_id, last_read_at)
+      SELECT u.id, b.id, CURRENT_TIMESTAMP
+      FROM users u CROSS JOIN branches b
+      WHERE NOT EXISTS (SELECT 1 FROM branch_reads)
+      ON CONFLICT (user_id, branch_id) DO NOTHING
+    `);
+  } catch (e) {
+    console.error("branch_reads backfill skipped:", e);
+  }
 
 // Migration: Add is_offline to products if it doesn't exist
 try {
@@ -6986,6 +7011,15 @@ async function startServer() {
         AND sender_role ${isRestaurant ? "<>" : "="} 'Restaurants'
     `, [branch_id]);
 
+    // Per-user read state: record that THIS user has now seen everything in this
+    // branch up to now. This drives each user's OWN unread badge, independent of
+    // whoever else on the team has or hasn't opened the thread.
+    await db.query(`
+      INSERT INTO branch_reads (user_id, branch_id, last_read_at)
+      VALUES ($1, $2, CURRENT_TIMESTAMP)
+      ON CONFLICT (user_id, branch_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
+    `, [user.id, branch_id]);
+
     // Only when this read actually flipped rows null->now, tell the other side
     // live so their "Seen" receipt updates instantly (the guard also prevents
     // re-read broadcast loops, since a repeat read affects 0 rows).
@@ -6997,25 +7031,35 @@ async function startServer() {
   });
 
   app.get("/api/branch-chat/threads", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
+    const userId = (req as any).user.id;
     const allowed = await getAllowedBrandIds((req as any).user);
-    const params: any[] = [];
+    const params: any[] = [userId];
     let brandFilter = '';
     if (allowed !== null) {
       if (allowed.length === 0) return res.json([]);
       params.push(allowed);
-      brandFilter = `WHERE brand_id = ANY($1)`;
+      brandFilter = `AND bm.brand_id = ANY($2)`;
     }
+    // Per-user unread: a restaurant message is unread for THIS user until they open
+    // the branch (which bumps their branch_reads.last_read_at). Users with no marker
+    // yet fall back to their own join date so pre-existing chatter isn't counted.
     const threads = await db.all(`
       WITH agg AS (
-        SELECT branch_id, brand_id,
-          MAX(created_at) AS last_at,
-          COUNT(*) FILTER (WHERE sender_role = 'Restaurants' AND read_at IS NULL)::int AS unread
-        FROM branch_messages ${brandFilter} GROUP BY branch_id, brand_id
+        SELECT bm.branch_id, bm.brand_id,
+          MAX(bm.created_at) AS last_at,
+          COUNT(*) FILTER (
+            WHERE bm.sender_role = 'Restaurants'
+              AND bm.created_at > COALESCE(brd.last_read_at, (SELECT created_at FROM users WHERE id = $1))
+          )::int AS unread
+        FROM branch_messages bm
+        LEFT JOIN branch_reads brd ON brd.branch_id = bm.branch_id AND brd.user_id = $1
+        WHERE 1=1 ${brandFilter}
+        GROUP BY bm.branch_id, bm.brand_id
       ),
       last_msg AS (
-        SELECT DISTINCT ON (branch_id) branch_id,
-          comment AS last_comment, (image_url IS NOT NULL) AS last_has_image, sender_role AS last_sender_role
-        FROM branch_messages ${brandFilter} ORDER BY branch_id, created_at DESC, id DESC
+        SELECT DISTINCT ON (bm.branch_id) bm.branch_id,
+          bm.comment AS last_comment, (bm.image_url IS NOT NULL) AS last_has_image, bm.sender_role AS last_sender_role
+        FROM branch_messages bm WHERE 1=1 ${brandFilter} ORDER BY bm.branch_id, bm.created_at DESC, bm.id DESC
       )
       SELECT a.branch_id, b.name AS brand_name, br.name AS branch_name,
         a.last_at, a.unread, lm.last_comment, lm.last_has_image, lm.last_sender_role

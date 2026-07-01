@@ -155,7 +155,14 @@ export default function BranchChatView() {
   };
 
   useEffect(() => { fetchThreads(); fetchBranches(); }, []);
-  useEffect(() => { fetchMessages(branchId); }, [branchId]);
+  useEffect(() => {
+    (async () => {
+      await fetchMessages(branchId);
+      // Opening a branch bumps this user's read marker server-side; refresh the
+      // thread list so MY unread badge for it clears right away (per-user).
+      if (!isRestaurant && branchId != null) fetchThreads();
+    })();
+  }, [branchId]);
 
   // Office can start a chat with any branch (even one that never messaged).
   const startChat = (bid: number) => {
