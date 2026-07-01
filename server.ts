@@ -6925,7 +6925,7 @@ async function startServer() {
         WHERE branch_id = $1 AND sender_role <> 'Restaurants'
       )
       SELECT bm.id, bm.branch_id, bm.sender_id, bm.sender_role, bm.comment, bm.image_url, bm.image_type,
-             bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, u.username,
+             bm.status, bm.status_at, su.username AS status_by_name, bm.created_at, bm.read_at, u.username,
              bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
              (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role,
              bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
@@ -6942,11 +6942,18 @@ async function startServer() {
 
     // Mark the OTHER side's messages as read for this viewer.
     const isRestaurant = user.role_name === 'Restaurants';
-    await db.query(`
+    const readResult = await db.query(`
       UPDATE branch_messages SET read_at = CURRENT_TIMESTAMP
       WHERE branch_id = $1 AND read_at IS NULL
         AND sender_role ${isRestaurant ? "<>" : "="} 'Restaurants'
     `, [branch_id]);
+
+    // Only when this read actually flipped rows null->now, tell the other side
+    // live so their "Seen" receipt updates instantly (the guard also prevents
+    // re-read broadcast loops, since a repeat read affects 0 rows).
+    if ((readResult.rowCount ?? 0) > 0) {
+      broadcast({ type: 'BRANCH_CHAT_READ', branch_id: Number(branch_id), by: isRestaurant ? 'restaurant' : 'office' });
+    }
 
     res.json(msgs);
   });

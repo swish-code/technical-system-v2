@@ -18,6 +18,7 @@ interface ChatMessage {
   status_at: string | null;
   status_by_name: string | null;
   created_at: string;
+  read_at: string | null;
   username: string;
   reply_to_id: number | null;
   reply_username: string | null;
@@ -184,6 +185,13 @@ export default function BranchChatView() {
         fetchMessages(branchId);
       }
     }
+    // The other side opened the chat and read our messages — refresh the open
+    // thread so the "Seen" receipt appears instantly, without a manual refresh.
+    if (lastMessage?.type === 'BRANCH_CHAT_READ') {
+      if (branchId != null && (isRestaurant || Number(lastMessage.branch_id) === Number(branchId))) {
+        fetchMessages(branchId);
+      }
+    }
   }, [lastMessage]);
 
   // Always land on the latest message (also after images load and grow the list).
@@ -259,6 +267,9 @@ export default function BranchChatView() {
             )}
             {messages.map((m) => {
               const mine = m.sender_id === user?.id;
+              // Read receipts (WhatsApp-style) show on the viewer's OWN side's
+              // messages: office sees them on office bubbles, restaurant on its own.
+              const sameSide = isRestaurant ? m.sender_role === 'Restaurants' : m.sender_role !== 'Restaurants';
               const replyBtn = (
                 <button onClick={() => setReplyTo(m)} title={lang === 'ar' ? 'رد' : 'Reply'}
                   className="shrink-0 self-center p-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand hover:bg-brand/10 transition">
@@ -341,8 +352,18 @@ export default function BranchChatView() {
                       );
                     })()}
 
-                    <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>
-                      {formatDate(m.created_at)}
+                    <div className={cn("flex items-center gap-1.5 text-[9px] font-bold mt-1", mine ? "justify-end" : "justify-start")}>
+                      {sameSide && (
+                        <span className={cn("inline-flex items-center gap-0.5",
+                          m.read_at
+                            ? (mine ? "text-white" : "text-emerald-600 dark:text-emerald-400")
+                            : (mine ? "text-white/70" : "text-zinc-400 dark:text-zinc-500"))}
+                          title={m.read_at ? `${lang === 'ar' ? 'تم القراءة' : 'Seen'} · ${formatDate(m.read_at)}` : (lang === 'ar' ? 'تم الإرسال' : 'Sent')}>
+                          {m.read_at ? <CheckCheck size={12} /> : <Check size={12} />}
+                          {m.read_at ? (lang === 'ar' ? 'تم القراءة' : 'Seen') : (lang === 'ar' ? 'تم الإرسال' : 'Sent')}
+                        </span>
+                      )}
+                      <span className="opacity-60">{formatDate(m.created_at)}</span>
                     </div>
                   </div>
                   {!mine && replyBtn}
