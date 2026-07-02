@@ -2785,7 +2785,14 @@ async function startServer() {
       if (roleTarget && !roleTarget.includes(u.role_name || "")) return;
       if (targetUserId !== null && u.id !== targetUserId) return;
 
-      client.send(JSON.stringify(data));
+      // A single client in a bad socket state (e.g. half-closed) can throw here.
+      // Uncaught, that would abort forEach and silently skip every client that
+      // comes after it in iteration order for this broadcast.
+      try {
+        client.send(JSON.stringify(data));
+      } catch (err) {
+        console.error("broadcast: failed to send to a client, skipping it", err);
+      }
     });
 
     // Trigger push notifications for new pending requests
@@ -3054,22 +3061,27 @@ async function startServer() {
   });
 
   app.post("/api/pending-requests", authenticate, async (req, res) => {
-    const { type, data } = req.body;
-    const result = await db.query(`
-      INSERT INTO pending_requests (user_id, type, data)
-      VALUES ($1, $2, $3) RETURNING id
-    `, [(req as any).user.id, type, JSON.stringify(data)]);
-    
-    broadcast({ type: "PENDING_REQUEST_CREATED" });
-    const branchName = data.branch_name || data.branch || "Unknown Branch";
-    sendSystemNotification(
-      "New Request Submitted",
-      "تم إرسال طلب جديد",
-      `New request received from ${branchName}`,
-      `طلب جديد مستلم من ${branchName}`,
-      ["Technical Back Office"]
-    );
-    res.json({ id: result.rows[0].id });
+    try {
+      const { type, data } = req.body;
+      const result = await db.query(`
+        INSERT INTO pending_requests (user_id, type, data)
+        VALUES ($1, $2, $3) RETURNING id
+      `, [(req as any).user.id, type, JSON.stringify(data)]);
+
+      broadcast({ type: "PENDING_REQUEST_CREATED" });
+      const branchName = data.branch_name || data.branch || "Unknown Branch";
+      sendSystemNotification(
+        "New Request Submitted",
+        "تم إرسال طلب جديد",
+        `New request received from ${branchName}`,
+        `طلب جديد مستلم من ${branchName}`,
+        ["Technical Back Office"]
+      );
+      res.json({ id: result.rows[0].id });
+    } catch (error) {
+      console.error("Error creating pending request:", error);
+      res.status(500).json({ error: "Failed to create request" });
+    }
   });
 
   app.post("/api/pending-requests/:id/approve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
@@ -3754,9 +3766,10 @@ async function startServer() {
   });
 
   app.get("/api/late-orders", authenticate, async (req, res) => {
+   try {
     const user = (req as any).user;
     const restriction = await getBrandRestriction(user);
-    
+
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
     const offset = (page - 1) * limit;
@@ -3922,6 +3935,10 @@ async function startServer() {
       page,
       limit
     });
+   } catch (error) {
+     console.error("Error fetching late orders:", error);
+     res.status(500).json({ error: "Failed to fetch late orders" });
+   }
   });
 
   app.put("/api/late-orders/:id", authenticate, authorize(["Restaurants", "Manager", "Super Visor", "Call Center", "Technical Back Office", "Operation Manager"]), async (req, res) => {
@@ -4231,20 +4248,25 @@ async function startServer() {
 
   // Brands Routes
   app.get("/api/brands", authenticate, async (req, res) => {
-    const { all } = req.query;
-    const restriction = all === 'true' ? null : await getBrandRestriction((req as any).user);
-    let brands;
-    if (restriction) {
-      const placeholders = restriction.brands.map((_: any, i: number) => `$${i + 1}`).join(',');
-      if (restriction.type === 'include') {
-        brands = await db.all(`SELECT * FROM brands WHERE name IN (${placeholders}) ORDER BY name ASC`, restriction.brands);
+    try {
+      const { all } = req.query;
+      const restriction = all === 'true' ? null : await getBrandRestriction((req as any).user);
+      let brands;
+      if (restriction) {
+        const placeholders = restriction.brands.map((_: any, i: number) => `$${i + 1}`).join(',');
+        if (restriction.type === 'include') {
+          brands = await db.all(`SELECT * FROM brands WHERE name IN (${placeholders}) ORDER BY name ASC`, restriction.brands);
+        } else {
+          brands = await db.all(`SELECT * FROM brands WHERE name NOT IN (${placeholders}) ORDER BY name ASC`, restriction.brands);
+        }
       } else {
-        brands = await db.all(`SELECT * FROM brands WHERE name NOT IN (${placeholders}) ORDER BY name ASC`, restriction.brands);
+        brands = await db.all("SELECT * FROM brands ORDER BY name ASC");
       }
-    } else {
-      brands = await db.all("SELECT * FROM brands ORDER BY name ASC");
+      res.json(brands);
+    } catch (error) {
+      console.error("Error fetching brands:", error);
+      res.status(500).json({ error: "Failed to fetch brands" });
     }
-    res.json(brands);
   });
 
   app.post("/api/brands", authenticate, authorize(["Technical Back Office", "Manager"]), async (req, res) => {
@@ -4273,21 +4295,31 @@ async function startServer() {
   });
 
   app.delete("/api/brands/:id", authenticate, authorize(["Technical Back Office", "Manager"]), async (req, res) => {
-    await db.query("DELETE FROM brands WHERE id = $1", [req.params.id]);
-    res.json({ success: true });
+    try {
+      await db.query("DELETE FROM brands WHERE id = $1", [req.params.id]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting brand:", error);
+      res.status(500).json({ error: "Failed to delete brand" });
+    }
   });
 
   // Dynamic Fields Routes
   app.get("/api/fields", authenticate, async (req, res) => {
-    const fields = await db.all("SELECT * FROM dynamic_fields ORDER BY field_order ASC");
-    const options = await db.all("SELECT * FROM field_options");
-    
-    const fieldsWithOptions = fields.map(field => ({
-      ...field,
-      options: options.filter(opt => opt.field_id === field.id)
-    }));
-    
-    res.json({ fields: fieldsWithOptions, options });
+    try {
+      const fields = await db.all("SELECT * FROM dynamic_fields ORDER BY field_order ASC");
+      const options = await db.all("SELECT * FROM field_options");
+
+      const fieldsWithOptions = fields.map(field => ({
+        ...field,
+        options: options.filter(opt => opt.field_id === field.id)
+      }));
+
+      res.json({ fields: fieldsWithOptions, options });
+    } catch (error) {
+      console.error("Error fetching fields:", error);
+      res.status(500).json({ error: "Failed to fetch fields" });
+    }
   });
 
   app.post("/api/fields", authenticate, authorize(["Manager"]), async (req, res) => {
@@ -4303,9 +4335,14 @@ async function startServer() {
   });
 
   app.delete("/api/fields/options/:id", authenticate, authorize(["Manager", "Technical Back Office"]), async (req, res) => {
-    await db.query("DELETE FROM field_options WHERE id = $1", [req.params.id]);
-    broadcast({ type: 'FIELDS_UPDATED' });
-    res.json({ success: true });
+    try {
+      await db.query("DELETE FROM field_options WHERE id = $1", [req.params.id]);
+      broadcast({ type: 'FIELDS_UPDATED' });
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error deleting field option:", error);
+      res.status(500).json({ error: "Failed to delete field option" });
+    }
   });
 
   app.delete("/api/fields/:id", authenticate, authorize(["Manager"]), async (req, res) => {
@@ -4326,15 +4363,21 @@ async function startServer() {
   });
 
   app.post("/api/fields/:id/options", authenticate, authorize(["Manager", "Technical Back Office"]), async (req, res) => {
-    const { value_en, value_ar, price } = req.body;
-    const fieldId = req.params.id;
-    const result = await db.query("INSERT INTO field_options (field_id, value_en, value_ar, price) VALUES ($1, $2, $3, $4) RETURNING id", [fieldId, value_en, value_ar, price || 0]);
-    broadcast({ type: 'FIELDS_UPDATED' });
-    res.json({ id: result.rows[0].id });
+    try {
+      const { value_en, value_ar, price } = req.body;
+      const fieldId = req.params.id;
+      const result = await db.query("INSERT INTO field_options (field_id, value_en, value_ar, price) VALUES ($1, $2, $3, $4) RETURNING id", [fieldId, value_en, value_ar, price || 0]);
+      broadcast({ type: 'FIELDS_UPDATED' });
+      res.json({ id: result.rows[0].id });
+    } catch (error) {
+      console.error("Error creating field option:", error);
+      res.status(500).json({ error: "Failed to create field option" });
+    }
   });
 
   // Products Routes
   app.get("/api/products", authenticate, async (req, res) => {
+   try {
     const { brand_id, all, page = '1', limit = '20', search, code, days } = req.query;
     const restriction = all === 'true' ? null : await getBrandRestriction((req as any).user);
     const pageNum = parseInt(page as string) || 1;
@@ -4452,13 +4495,17 @@ async function startServer() {
       return result;
     });
 
-    res.json({ 
-      products: filteredProducts, 
+    res.json({
+      products: filteredProducts,
       fieldValues,
       total,
       page: pageNum,
       totalPages: Math.ceil(total / limitNum)
     });
+   } catch (error) {
+     console.error("Error fetching products:", error);
+     res.status(500).json({ error: "Failed to fetch products" });
+   }
   });
 
   app.post("/api/products/:id/toggle-offline", authenticate, authorize(["Manager", "Super Visor"]), async (req, res) => {
@@ -4978,11 +5025,13 @@ async function startServer() {
 
   // Audit Logs
   app.get("/api/audit-logs", authenticate, authorize(["Technical Back Office", "Manager", "Call Center", "Super Visor", "Restaurants", "Area Manager", "Operation Manager"]), async (req, res) => {
-    const restriction = await getBrandRestriction((req as any).user);
+   try {
+    const user = (req as any).user;
+    const restriction = await getBrandRestriction(user);
     const logs = await db.all(`
-      SELECT a.*, u.username 
-      FROM audit_logs a 
-      LEFT JOIN users u ON a.user_id = u.id 
+      SELECT a.*, u.username
+      FROM audit_logs a
+      LEFT JOIN users u ON a.user_id = u.id
       WHERE (a.action IN ('HIDE', 'UNHIDE', 'EDIT_HIDDEN_ITEM'))
         AND (a.target_table IN ('products', 'hidden_items'))
       ORDER BY timestamp DESC
@@ -4994,7 +5043,7 @@ async function startServer() {
         try {
           const data = JSON.parse(log.new_value || log.old_value || '{}');
           const brandName = data.brand_name || data.brand;
-          if (!brandName) return true; 
+          if (!brandName) return true;
           if (restriction.type === 'include') {
             return restriction.brands.includes(brandName);
           } else {
@@ -5006,7 +5055,28 @@ async function startServer() {
       });
     }
 
+    // Restaurants accounts are scoped to a single branch everywhere else in the
+    // app (e.g. late-orders). getBrandRestriction() only narrows by brand, so
+    // without this a branch account could see hide/unhide history for every
+    // other branch under the same brand. Records with no branch_id (an
+    // "all branches" hide) still apply to this branch, so those stay visible.
+    if (user.role_name === 'Restaurants' && user.branch_id) {
+      filteredLogs = filteredLogs.filter(log => {
+        try {
+          const data = JSON.parse(log.new_value || log.old_value || '{}');
+          if (data.branch_id === undefined || data.branch_id === null) return true;
+          return Number(data.branch_id) === Number(user.branch_id);
+        } catch (e) {
+          return true;
+        }
+      });
+    }
+
     res.json(filteredLogs);
+   } catch (error) {
+     console.error("Error fetching audit logs:", error);
+     res.status(500).json({ error: "Failed to fetch audit logs" });
+   }
   });
 
   // Edit a hide/unhide history session (Manager/admin only) to correct a
@@ -5036,7 +5106,11 @@ async function startServer() {
         const hideLog = await db.get("SELECT * FROM audit_logs WHERE id = $1 AND action = 'HIDE'", [hideLogId]) as any;
         if (hideLog) {
           let data: any = {};
-          try { data = JSON.parse(hideLog.new_value || '{}'); } catch (e) { data = {}; }
+          // Some HIDE logs (e.g. from the pending-request approval path) store their
+          // payload in old_value instead of new_value. Falling back here mirrors every
+          // read site's `new_value || old_value` pattern — without it, editing one of
+          // those records wipes product_name/brand_name/branch from new_value forever.
+          try { data = JSON.parse(hideLog.new_value || hideLog.old_value || '{}'); } catch (e) { data = {}; }
           if (reason !== undefined && reason !== null && reason !== '') data.reason = reason;
           if (rp) data.responsible_party = rp;
           await db.query(
@@ -5344,8 +5418,25 @@ async function startServer() {
         return res.status(404).json({ error: "Hidden item not found" });
       }
 
+      // Managers/Super Visors restricted to specific brands (via user_brands)
+      // could otherwise edit a hidden item into/out of a brand they don't have
+      // access to, since brand_id/branch_id here come straight from the request
+      // body with no server-side check. Unrestricted accounts (the common case)
+      // are unaffected — getBrandRestriction() returns null for them.
+      const restriction = await getBrandRestriction((req as any).user);
+      if (restriction && brand_id) {
+        const targetBrand = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+        const brandName = targetBrand?.name;
+        const allowed = !!brandName && (restriction.type === 'include'
+          ? restriction.brands.includes(brandName)
+          : !restriction.brands.includes(brandName));
+        if (!allowed) {
+          return res.status(403).json({ error: "You do not have permission to edit hidden items for this brand" });
+        }
+      }
+
       const result = await db.query(`
-        UPDATE hidden_items 
+        UPDATE hidden_items
         SET brand_id = $1, branch_id = $2, product_id = $3, agent_name = $4, reason = $5, action_to_unhide = $6, comment = $7, requested_at = $8, responsible_party = $9, updated_at = $10, updated_by = $11
         WHERE id = $12
       `, [brand_id, branch_id, product_id, agent_name, reason, action_to_unhide, comment, requested_at, responsible_party, now, userId, id]);
