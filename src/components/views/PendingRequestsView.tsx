@@ -23,7 +23,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const [processingId, setProcessingId] = useState<number | null>(null);
   const [selectedRequest, setSelectedRequest] = useState<PendingRequest | null>(null);
   const [viewMode, setViewMode] = useState<'pending' | 'history'>('pending');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'hide_unhide' | 'busy_branch' | 'HIDE' | 'UNHIDE' | 'BUSY' | 'OPEN'>('all');
+  const [mainTab, setMainTab] = useState<'hide' | 'busy' | 'chat'>('hide');
   const [brandFilter, setBrandFilter] = useState<string>('all');
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [brands, setBrands] = useState<any[]>([]);
@@ -128,7 +128,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [viewMode, typeFilter, brandFilter, branchFilter]);
+  }, [viewMode, mainTab, brandFilter, branchFilter]);
 
   const handleAction = async (id: number, action: 'approve' | 'reject') => {
     setProcessingId(id);
@@ -211,26 +211,21 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     }
   };
 
-  const filteredRequests = requests.filter(r => {
+  // Shared match: current Pending/History mode + brand/branch filters (no type).
+  const matchesFilters = (r: any) => {
     const matchesMode = viewMode === 'pending' ? r.status === 'Pending' : r.status !== 'Pending';
-    let matchesType = typeFilter === 'all';
-    if (!matchesType) {
-      const action = r.data?.action;
-      if (typeFilter === 'HIDE') matchesType = r.type === 'hide_unhide' && action === 'HIDE';
-      else if (typeFilter === 'UNHIDE') matchesType = r.type === 'hide_unhide' && action === 'UNHIDE';
-      else if (typeFilter === 'BUSY') matchesType = r.type === 'busy_branch' && (action === 'BUSY' || !action);
-      else if (typeFilter === 'OPEN') matchesType = r.type === 'busy_branch' && action === 'OPEN';
-      else matchesType = r.type === typeFilter;
-    }
-    
     const data = r.data || {};
     const brandName = data.brand_name || data.brand || '';
     const branchName = data.branch_name || data.branch || '';
-    
     const matchesBrand = brandFilter === 'all' || brandName === brandFilter;
     const matchesBranch = branchFilter === 'all' || branchName === branchFilter;
-    
-    return matchesMode && matchesType && matchesBrand && matchesBranch;
+    return matchesMode && matchesBrand && matchesBranch;
+  };
+
+  const filteredRequests = requests.filter(r => {
+    const matchesTab = mainTab === 'hide' ? r.type === 'hide_unhide'
+      : mainTab === 'busy' ? r.type === 'busy_branch' : false;
+    return matchesTab && matchesFilters(r);
   });
 
   const filteredTickets = chatTickets.filter(t => {
@@ -238,6 +233,11 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     const matchesBranch = branchFilter === 'all' || t.branch_name === branchFilter;
     return matchesBrand && matchesBranch;
   });
+
+  // Per-tab counts (respect the active Pending/History + brand/branch filters).
+  const hideCount = requests.filter(r => r.type === 'hide_unhide' && matchesFilters(r)).length;
+  const busyCount = requests.filter(r => r.type === 'busy_branch' && matchesFilters(r)).length;
+  const chatCount = filteredTickets.length;
 
   const totalPages = Math.ceil(filteredRequests.length / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
@@ -284,17 +284,34 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
         </h2>
         
         <div className="flex flex-wrap items-center gap-3">
-          <select
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value as any)}
-            className="px-4 py-2 bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 rounded-xl font-bold text-sm outline-none focus:border-brand transition-all text-zinc-900 dark:text-white"
-          >
-            <option value="all">{lang === 'en' ? 'All Types' : 'جميع الأنواع'}</option>
-            <option value="HIDE">{lang === 'en' ? 'Hide Item' : 'إخفاء منتج'}</option>
-            <option value="UNHIDE">{lang === 'en' ? 'Unhide Item' : 'إظهار منتج'}</option>
-            <option value="BUSY">{lang === 'en' ? 'Busy Branch' : 'فرع مشغول'}</option>
-            <option value="OPEN">{lang === 'en' ? 'Open Branch' : 'فتح فرع'}</option>
-          </select>
+          <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl">
+            {([
+              { key: 'hide', label: lang === 'en' ? 'Hide' : 'إخفاء', count: hideCount },
+              { key: 'busy', label: lang === 'en' ? 'Busy' : 'بيزي', count: busyCount },
+              { key: 'chat', label: lang === 'en' ? 'Chat' : 'شات', count: chatCount },
+            ] as const).map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setMainTab(tab.key)}
+                className={cn(
+                  "px-5 py-2 rounded-lg text-sm font-black transition-all flex items-center gap-2",
+                  mainTab === tab.key
+                    ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                )}
+              >
+                {tab.label}
+                {tab.count > 0 && (
+                  <span className={cn(
+                    "min-w-5 h-5 px-1.5 rounded-full text-[10px] font-black flex items-center justify-center",
+                    mainTab === tab.key ? "bg-brand text-white" : "bg-zinc-200 dark:bg-zinc-600 text-zinc-600 dark:text-zinc-300"
+                  )}>
+                    {tab.count}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
 
           <select
             value={brandFilter}
@@ -330,35 +347,37 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
             {lang === 'en' ? 'Download Excel' : 'تحميل إكسيل'}
           </button>
 
-          <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl">
-            <button
-              onClick={() => setViewMode('pending')}
-              className={cn(
-                "px-6 py-2 rounded-lg text-sm font-black transition-all",
-                viewMode === 'pending' 
-                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm" 
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              )}
-            >
-              {lang === 'en' ? 'Pending' : 'المعلقة'}
-            </button>
-            <button
-              onClick={() => setViewMode('history')}
-              className={cn(
-                "px-6 py-2 rounded-lg text-sm font-black transition-all",
-                viewMode === 'history' 
-                  ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm" 
-                  : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
-              )}
-            >
-              {lang === 'en' ? 'History' : 'السجل'}
-            </button>
-          </div>
+          {mainTab !== 'chat' && (
+            <div className="flex bg-zinc-100 dark:bg-zinc-800 p-1 rounded-xl">
+              <button
+                onClick={() => setViewMode('pending')}
+                className={cn(
+                  "px-6 py-2 rounded-lg text-sm font-black transition-all",
+                  viewMode === 'pending'
+                    ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                )}
+              >
+                {lang === 'en' ? 'Pending' : 'المعلقة'}
+              </button>
+              <button
+                onClick={() => setViewMode('history')}
+                className={cn(
+                  "px-6 py-2 rounded-lg text-sm font-black transition-all",
+                  viewMode === 'history'
+                    ? "bg-white dark:bg-zinc-700 text-zinc-900 dark:text-white shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300"
+                )}
+              >
+                {lang === 'en' ? 'History' : 'السجل'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
       {/* Invoice Chat tickets — restaurant messages awaiting an office reply */}
-      {viewMode === 'pending' && filteredTickets.length > 0 && (
+      {mainTab === 'chat' && filteredTickets.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center gap-2">
             <MessageSquare size={18} className="text-brand" />
@@ -416,6 +435,14 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
         </div>
       )}
 
+      {mainTab === 'chat' && filteredTickets.length === 0 && (
+        <div className="bg-white dark:bg-zinc-900 rounded-3xl p-12 text-center border border-zinc-200 dark:border-zinc-800">
+          <CheckCircle2 className="w-12 h-12 text-zinc-200 dark:text-zinc-800 mx-auto mb-4" />
+          <p className="text-zinc-500 font-bold">{lang === 'en' ? 'No chat tickets' : 'لا توجد تذاكر شات'}</p>
+        </div>
+      )}
+
+      {mainTab !== 'chat' && (
       <div className="grid grid-cols-1 gap-4">
         {filteredRequests.length === 0 ? (
           <div className="bg-white dark:bg-zinc-900 rounded-3xl p-12 text-center border border-zinc-200 dark:border-zinc-800">
@@ -591,6 +618,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
           </>
         )}
       </div>
+      )}
 
       {/* Details Modal */}
       <AnimatePresence>
