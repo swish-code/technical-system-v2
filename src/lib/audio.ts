@@ -4,7 +4,7 @@
 
 let sharedCtx: AudioContext | null = null;
 
-function getCtx(): AudioContext | null {
+function createCtx(): AudioContext | null {
   if (typeof window === "undefined") return null;
   if (!sharedCtx) {
     const Ctx = (window.AudioContext as typeof AudioContext) ||
@@ -12,16 +12,33 @@ function getCtx(): AudioContext | null {
     if (!Ctx) return null;
     sharedCtx = new Ctx();
   }
-  if (sharedCtx.state === "suspended") {
-    void sharedCtx.resume();
-  }
   return sharedCtx;
 }
 
-function beep(durationMs: number, frequency: number, volume: number): void {
-  const ctx = getCtx();
-  if (!ctx) return;
+function getCtx(): AudioContext | null {
+  const ctx = createCtx();
+  if (!ctx) return null;
+  if (ctx.state === "suspended") {
+    void ctx.resume();
+  }
+  return ctx;
+}
 
+// Browsers start an AudioContext "suspended" until it's resumed during a real
+// user gesture (click/tap/key). Because our beeps only fire from incoming
+// WebSocket notifications — never from a user action — the context would stay
+// suspended and every alert would be silent. unlockAudio() is wired to the
+// first user interaction (see main.tsx) to create + resume the context while a
+// gesture is active, so all later notification sounds actually play. Idempotent.
+export function unlockAudio(): void {
+  const ctx = createCtx();
+  if (!ctx) return;
+  if (ctx.state === "suspended") {
+    void ctx.resume();
+  }
+}
+
+function emit(ctx: AudioContext, durationMs: number, frequency: number, volume: number): void {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
   osc.type = "sine";
@@ -39,6 +56,19 @@ function beep(durationMs: number, frequency: number, volume: number): void {
   gain.gain.setValueAtTime(volume, now + durationMs / 1000 - 0.02);
   gain.gain.linearRampToValueAtTime(0, now + durationMs / 1000);
   osc.stop(now + durationMs / 1000);
+}
+
+function beep(durationMs: number, frequency: number, volume: number): void {
+  const ctx = getCtx();
+  if (!ctx) return;
+
+  // If the context is still resuming, scheduling against its (frozen) clock
+  // drops the sound. Wait for resume to settle, then emit.
+  if (ctx.state === "suspended") {
+    ctx.resume().then(() => emit(ctx, durationMs, frequency, volume)).catch(() => {});
+    return;
+  }
+  emit(ctx, durationMs, frequency, volume);
 }
 
 /** One-shot notification chime (two quick beeps). Use for incoming notifications. */
