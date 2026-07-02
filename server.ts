@@ -2628,6 +2628,11 @@ async function startServer() {
   console.log("Starting server...");
   
   const app = express();
+  // Railway sits behind one edge proxy hop that sets X-Forwarded-For. Without
+  // this, express-rate-limit (used on /api/login) throws a ValidationError on
+  // every request since it can't safely resolve the real client IP, which
+  // hangs the login request forever (the throw is an unhandled rejection).
+  app.set("trust proxy", 1);
   // No CORS middleware: frontend is served same-origin in dev (Vite middleware)
   // and prod (express.static of dist/). If you ever serve the API to a different
   // origin, add cors({ origin: process.env.FRONTEND_ORIGIN }) — never cors() bare.
