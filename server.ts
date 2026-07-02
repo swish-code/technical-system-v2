@@ -6235,6 +6235,20 @@ async function startServer() {
       message_ar: `الفرع ${branch} الآن مشغول`,
     });
     broadcast({ type: "BUSY_PERIOD_CREATED" });
+
+    // Real browser push so office monitors are alerted (with the OS sound) that
+    // a branch went busy, even if the app isn't open/focused. Busy events are
+    // infrequent, so this won't recreate the chat-style flood.
+    sendPushToRoles(
+      ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"],
+      {
+        title: "Branch Busy",
+        body: `Branch ${branch} (${brand}) is now Busy.`,
+        tag: `busy-start-${result.rows[0].id}`,
+        data: { type: "BUSY_BRANCH", recordId: result.rows[0].id, url: "/" },
+      }
+    ).catch(e => console.error("busy push failed", e));
+
     res.json({ id: result.rows[0].id });
   });
 
@@ -6433,6 +6447,20 @@ async function startServer() {
           `انتهى الوقت المحدد لفرع ${record.branch} (${record.brand})!`,
           ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"],
           "BUSY_BRANCH"
+        );
+
+        // Real browser push so office staff are alerted (with the OS
+        // notification sound) even when the app is closed or in the background.
+        // Fires once per record — alarm_triggered is set above, so no spam.
+        await sendPushToRoles(
+          ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"],
+          {
+            title: "Busy Timer Expired",
+            body: `${record.branch} (${record.brand}) has exceeded its busy time — action needed.`,
+            tag: `busy-timer-${record.id}`,
+            requireInteraction: true,
+            data: { type: "BUSY_TIMER", recordId: record.id, url: "/" },
+          }
         );
       }
     } catch (err) {
@@ -7034,34 +7062,13 @@ async function startServer() {
     // Respond immediately; notifications/push run after (don't block the sender).
     res.json({ id: ins.rows[0].id });
 
+    // Chat is intentionally quiet: no popup, no sound, no browser push. With
+    // many messages those flooded the notification system (and drowned out the
+    // busy alarms). The only signal chat emits is BRANCH_CHAT_UPDATED, which
+    // drives the in-app unread badge/count — that's the sole chat indicator.
     try {
-      const brand = await db.get("SELECT name FROM brands WHERE id = $1", [branch.brand_id]) as any;
-      const label = `${brand?.name || ''} · ${branch.name}`;
-      const preview = comment ? comment.slice(0, 80) : '📷';
-      const recipients = fromRestaurant
-        ? ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]
-        : ["Restaurants"];
-      broadcast({
-        type: "NOTIFICATION",
-        notificationType: "CALL_CENTER",
-        title_en: "New invoice message",
-        title_ar: "رسالة فاتورة جديدة",
-        message_en: `${label} — ${user.username}: ${preview}`,
-        message_ar: `${label} — ${user.username}: ${preview}`,
-        role_target: recipients,
-        ...(fromRestaurant ? {} : { brand_id: branch.brand_id, branch_id: branch.id }),
-        chat_branch_id: branch.id,
-      });
       broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
-      const push = {
-        title: "New invoice message",
-        body: `${label} — ${user.username}: ${preview}`,
-        tag: `branch-chat-${branch.id}`,
-        data: { type: "BRANCH_CHAT", branchId: branch.id, url: `/?chat=${branch.id}` },
-      };
-      if (fromRestaurant) await sendPushToRoles(recipients, push);
-      else await sendPushToRoles(["Restaurants"], push, branch.id);
-    } catch (e) { console.error("branch-chat notify failed", e); }
+    } catch (e) { console.error("branch-chat unread-badge broadcast failed", e); }
   });
 
   app.get("/api/branch-chat", authenticate, authorize(CHAT_ROLES), async (req, res) => {
