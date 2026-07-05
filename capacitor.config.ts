@@ -14,7 +14,7 @@ const config: CapacitorConfig = {
   appName: 'Swish Menu',
   webDir: 'dist',
   server: {
-    url: 'https://REPLACE-WITH-YOUR-RAILWAY-URL',
+    url: 'https://technical-system-v2-production.up.railway.app',
     cleartext: false,
     androidScheme: 'https',
   },
