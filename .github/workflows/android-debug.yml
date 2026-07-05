@@ -1,8 +1,11 @@
 name: Build Android app (debug APK)
 
-# Manual trigger. Produces an installable APK you can put on an Android phone
-# to TEST the app right away — no keystore and no Play account needed.
+# Produces an installable APK you can put on an Android phone to TEST the app
+# right away — no keystore and no Play account needed. Runs on every push to
+# the mobile-app branch (and can be run manually).
 on:
+  push:
+    branches: [mobile-app]
   workflow_dispatch:
 
 jobs:
