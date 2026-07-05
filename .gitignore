@@ -33,3 +33,9 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Android signing / Firebase secrets (never commit these)
+*.keystore
+*.jks
+android/app/google-services.json
+android/app/release.keystore
