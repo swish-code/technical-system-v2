@@ -812,6 +812,31 @@ async function initDb() {
     PRIMARY KEY (user_id, branch_id)
   );
 
+  -- Group chat (admin-created, member-scoped, multi-user) — separate from the
+  -- branch chat model. chat_group_members controls who can see/use a group.
+  CREATE TABLE IF NOT EXISTS chat_groups (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_by INTEGER,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE TABLE IF NOT EXISTS chat_group_members (
+    group_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    PRIMARY KEY (group_id, user_id)
+  );
+  CREATE TABLE IF NOT EXISTS group_messages (
+    id SERIAL PRIMARY KEY,
+    group_id INTEGER NOT NULL,
+    sender_id INTEGER NOT NULL,
+    comment TEXT,
+    image_url TEXT,
+    image_type TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_chat_group_members_user ON chat_group_members(user_id);
+
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -7295,6 +7320,86 @@ async function startServer() {
       ORDER BY brand_name, branch_name, created_at
     `);
     res.json(rows);
+  });
+
+  // ===== Group chat (admin-created, member-scoped, multi-user) =====
+  const GROUP_ADMIN_ROLES = ["Manager"]; // only admins can create groups
+
+  // Create a group: name + member user ids. The creator is always a member.
+  app.post("/api/chat-groups", authenticate, authorize(GROUP_ADMIN_ROLES), async (req, res) => {
+    const creatorId = (req as any).user.id;
+    const name = (req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: "Group name required" });
+    const raw = Array.isArray(req.body.member_ids) ? req.body.member_ids : [];
+    const memberIds: number[] = Array.from(new Set(raw.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0)));
+    if (!memberIds.includes(creatorId)) memberIds.push(creatorId);
+    try {
+      const group = await db.transaction(async (client) => {
+        const g = await client.query(`INSERT INTO chat_groups (name, created_by) VALUES ($1, $2) RETURNING id, name, created_at`, [name, creatorId]);
+        const gid = g.rows[0].id;
+        for (const uid of memberIds) {
+          await client.query(`INSERT INTO chat_group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [gid, uid]);
+        }
+        return g.rows[0];
+      });
+      broadcast({ type: "GROUP_UPDATED", group_id: group.id });
+      res.json(group);
+    } catch (e) {
+      console.error("create group failed", e);
+      res.status(500).json({ error: "Failed to create group" });
+    }
+  });
+
+  // Groups the current user is a member of, with a last-message preview.
+  app.get("/api/chat-groups", authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const groups = await db.all(`
+      SELECT g.id, g.name, g.created_at,
+        lm.last_comment, lm.last_has_image, lm.last_at
+      FROM chat_groups g
+      JOIN chat_group_members m ON m.group_id = g.id AND m.user_id = $1
+      LEFT JOIN LATERAL (
+        SELECT comment AS last_comment, (image_url IS NOT NULL) AS last_has_image, created_at AS last_at
+        FROM group_messages gm WHERE gm.group_id = g.id ORDER BY created_at DESC, id DESC LIMIT 1
+      ) lm ON true
+      ORDER BY COALESCE(lm.last_at, g.created_at) DESC
+    `, [userId]);
+    res.json(groups);
+  });
+
+  // Messages in a group (members only).
+  app.get("/api/chat-groups/:id/messages", authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const groupId = req.params.id;
+    const member = await db.get(`SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2`, [groupId, userId]);
+    if (!member) return res.status(403).json({ error: "Not a member of this group" });
+    const msgs = await db.all(`
+      SELECT gm.id, gm.group_id, gm.sender_id, gm.comment, gm.image_url, gm.image_type, gm.created_at,
+        u.username, r.name AS sender_role
+      FROM group_messages gm
+      JOIN users u ON gm.sender_id = u.id
+      LEFT JOIN roles r ON u.role_id = r.id
+      WHERE gm.group_id = $1 ORDER BY gm.created_at ASC
+    `, [groupId]);
+    res.json(msgs);
+  });
+
+  // Post a message to a group (members only). Optional image upload.
+  app.post("/api/chat-groups/:id/messages", authenticate, upload.single('image'), async (req, res) => {
+    const userId = (req as any).user.id;
+    const groupId = req.params.id;
+    const member = await db.get(`SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2`, [groupId, userId]);
+    if (!member) return res.status(403).json({ error: "Not a member of this group" });
+    const comment = (req.body.comment || '').trim() || null;
+    const image_url = req.file ? `/uploads/${req.file.filename}` : null;
+    const image_type = req.file ? req.file.mimetype : null;
+    if (!comment && !image_url) return res.status(400).json({ error: "Message is empty" });
+    const ins = await db.query(`
+      INSERT INTO group_messages (group_id, sender_id, comment, image_url, image_type)
+      VALUES ($1, $2, $3, $4, $5) RETURNING id
+    `, [groupId, userId, comment, image_url, image_type]);
+    res.json({ id: ins.rows[0].id });
+    try { broadcast({ type: "GROUP_UPDATED", group_id: Number(groupId) }); } catch (e) { console.error("group broadcast failed", e); }
   });
 
   // Per-employee chat reply performance (replies sent + avg reply minutes).

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3 } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3, Users } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -86,6 +86,18 @@ export default function BranchChatView() {
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [flashId, setFlashId] = useState<number | null>(null);
+
+  // --- Group chat (admin-created, member-scoped) ---
+  const isGroupAdmin = user?.role_name === 'Manager';
+  const [groups, setGroups] = useState<any[]>([]);
+  const [groupId, setGroupId] = useState<number | null>(null);
+  const [groupMessages, setGroupMessages] = useState<any[]>([]);
+  const [showNewGroup, setShowNewGroup] = useState(false);
+  const [groupName, setGroupName] = useState('');
+  const [allUsers, setAllUsers] = useState<any[]>([]);
+  const [memberIds, setMemberIds] = useState<number[]>([]);
+  const [userSearch, setUserSearch] = useState('');
+  const [creatingGroup, setCreatingGroup] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
 
   // Jump to (and briefly flash) the original message a quote points at.
@@ -167,6 +179,7 @@ export default function BranchChatView() {
   // Office can start a chat with any branch (even one that never messaged).
   const startChat = (bid: number) => {
     setBranchId(bid);
+    setGroupId(null);
     setShowNew(false);
     setNewSearch('');
   };
@@ -256,6 +269,142 @@ export default function BranchChatView() {
       XLSX.writeFile(wb, `Invoice_Chat_Log_${new Date().toISOString().slice(0, 10)}.xlsx`);
     } catch (e) { /* ignore */ } finally { setExporting(false); }
   };
+
+  const fetchGroups = async () => {
+    if (isRestaurant) return;
+    try { const res = await fetchWithAuth(`${API_URL}/chat-groups`); if (res.ok) setGroups(await res.json()); } catch { /* ignore */ }
+  };
+  const fetchGroupMessages = async (gid: number | null) => {
+    if (!gid) { setGroupMessages([]); return; }
+    try { const res = await fetchWithAuth(`${API_URL}/chat-groups/${gid}/messages`); if (res.ok) setGroupMessages(await res.json()); } catch { /* ignore */ }
+  };
+  const fetchAllUsers = async () => {
+    try { const res = await fetchWithAuth(`${API_URL}/users`); if (res.ok) setAllUsers(await res.json()); } catch { /* ignore */ }
+  };
+
+  // Open a group thread (mutually exclusive with a branch thread).
+  const openGroup = (gid: number) => {
+    setGroupId(gid); setBranchId(null);
+    setComment(''); setImage(null); setImagePreview(null); setReplyTo(null);
+  };
+
+  const createGroup = async () => {
+    if (!groupName.trim() || creatingGroup) return;
+    setCreatingGroup(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/chat-groups`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: groupName.trim(), member_ids: memberIds }),
+      });
+      if (res.ok) {
+        const g = await res.json();
+        setShowNewGroup(false); setGroupName(''); setMemberIds([]); setUserSearch('');
+        await fetchGroups();
+        openGroup(g.id);
+      }
+    } catch { /* ignore */ } finally { setCreatingGroup(false); }
+  };
+
+  const sendGroup = async () => {
+    if (!groupId || (!comment.trim() && !image) || sending) return;
+    setSending(true);
+    try {
+      const fd = new FormData();
+      if (comment.trim()) fd.append('comment', comment.trim());
+      if (image) fd.append('image', image);
+      const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/messages`, { method: 'POST', body: fd });
+      if (res.ok) { setComment(''); setImage(null); setImagePreview(null); await fetchGroupMessages(groupId); }
+    } catch { /* ignore */ } finally { setSending(false); }
+  };
+
+  useEffect(() => { fetchGroups(); }, []);
+  useEffect(() => { fetchGroupMessages(groupId); }, [groupId]);
+  useEffect(() => { if (groupId) endRef.current?.scrollIntoView({ block: 'end' }); }, [groupMessages, groupId]);
+  useEffect(() => {
+    if (lastMessage?.type === 'GROUP_UPDATED') {
+      fetchGroups();
+      if (groupId != null && Number(lastMessage.group_id) === Number(groupId)) fetchGroupMessages(groupId);
+    }
+  }, [lastMessage]);
+
+  const activeGroup = groups.find((g) => g.id === groupId) || null;
+  const groupUserList = allUsers
+    .filter((u: any) => {
+      const q = userSearch.trim().toLowerCase();
+      return !q || (u.username || '').toLowerCase().includes(q) || (u.role_name || '').toLowerCase().includes(q);
+    });
+
+  const GroupPane = (
+    <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+      {!groupId ? (
+        <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
+          <Users size={40} />
+          <p className="font-bold uppercase tracking-widest text-xs">{lang === 'ar' ? 'اختر جروبًا' : 'Select a group'}</p>
+        </div>
+      ) : (
+        <>
+          <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center gap-3">
+            <div className="w-9 h-9 rounded-xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Users size={18} /></div>
+            <div className="min-w-0">
+              <p className="font-black text-zinc-900 dark:text-white truncate">{activeGroup?.name || (lang === 'ar' ? 'جروب' : 'Group')}</p>
+              <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'محادثة جماعية' : 'Group chat'}</p>
+            </div>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
+            {groupMessages.length === 0 && (
+              <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
+                {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
+              </p>
+            )}
+            {groupMessages.map((m) => {
+              const mine = m.sender_id === user?.id;
+              return (
+                <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
+                  <div className={cn("max-w-[78%] rounded-2xl p-3 shadow-sm",
+                    mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white")}>
+                    <div className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-70">
+                      {m.username} · {roleLabel(m.sender_role, lang)}
+                    </div>
+                    {m.image_url && (
+                      <img src={m.image_url} alt="attachment" className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
+                        onClick={() => window.open(m.image_url, '_blank')} />
+                    )}
+                    {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
+                    <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>{formatDate(m.created_at)}</div>
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={endRef} />
+          </div>
+          <div className="border-t border-zinc-100 dark:border-zinc-800 p-3">
+            {imagePreview && (
+              <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
+                <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
+                <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
+              </div>
+            )}
+            <div className="flex items-center gap-2">
+              <label className="shrink-0 p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand cursor-pointer transition">
+                <Paperclip size={18} />
+                <input type="file" accept="image/*" className="hidden" onChange={pickFile} />
+              </label>
+              <input
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGroup(); } }}
+                placeholder={lang === 'ar' ? 'اكتب رسالة...' : 'Write a message...'}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+              <button onClick={sendGroup} disabled={sending || (!comment.trim() && !image)}
+                className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
+                <Send size={18} />
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
 
   const ChatPane = (
     <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
@@ -493,6 +642,13 @@ export default function BranchChatView() {
               <Plus size={16} />
               {lang === 'ar' ? 'محادثة جديدة' : 'New Chat'}
             </button>
+            {isGroupAdmin && (
+              <button onClick={() => { setShowNewGroup(true); fetchAllUsers(); }}
+                className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-zinc-900 dark:bg-white text-white dark:text-zinc-900 text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
+                <Users size={16} />
+                {lang === 'ar' ? 'جروب جديد' : 'New Group'}
+              </button>
+            )}
             {/* Filters */}
             <div className="space-y-2 px-1 pt-1">
               <div className="relative">
@@ -513,13 +669,34 @@ export default function BranchChatView() {
               </button>
             </div>
 
+            {/* Groups (member-scoped) — shown above the branch threads */}
+            {groups.length > 0 && (
+              <div className="space-y-1 pb-2 mb-1 border-b border-zinc-100 dark:border-zinc-800">
+                <p className="px-2 pt-1 text-[10px] font-black uppercase tracking-widest text-zinc-400">{lang === 'ar' ? 'الجروبات' : 'Groups'}</p>
+                {groups.map((g) => {
+                  const gpreview = g.last_comment || (g.last_has_image ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '');
+                  return (
+                    <button key={`g-${g.id}`} onClick={() => openGroup(g.id)}
+                      className={cn("w-full text-left px-3 py-2.5 rounded-2xl transition-all flex items-center gap-2",
+                        groupId === g.id ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800")}>
+                      <div className="w-8 h-8 rounded-xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Users size={15} /></div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{g.name}</p>
+                        {gpreview && <p className="text-xs truncate mt-0.5 text-zinc-400 font-medium">{gpreview}</p>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
             {visibleThreads.length === 0 && <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا محادثات' : 'No chats'}</p>}
             {visibleThreads.map((t) => {
               const preview = t.last_comment || (t.last_has_image ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '');
               return (
                 <button
                   key={t.branch_id}
-                  onClick={() => setBranchId(t.branch_id)}
+                  onClick={() => { setBranchId(t.branch_id); setGroupId(null); }}
                   className={cn(
                     "w-full text-left px-3 py-2.5 rounded-2xl transition-all flex items-start gap-2",
                     branchId === t.branch_id ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800"
@@ -545,7 +722,7 @@ export default function BranchChatView() {
               );
             })}
           </div>
-          {ChatPane}
+          {groupId ? GroupPane : ChatPane}
         </div>
       )}
 
@@ -584,6 +761,61 @@ export default function BranchChatView() {
                 </button>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* New-group picker (admin): name the group + pick which users see it */}
+      {showNewGroup && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-zinc-900/70 backdrop-blur-sm" onClick={() => setShowNewGroup(false)} />
+          <div className="relative bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-md border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-xl font-black text-zinc-900 dark:text-white">{lang === 'ar' ? 'جروب جديد' : 'New Group'}</h3>
+              <button onClick={() => setShowNewGroup(false)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl"><X size={20} /></button>
+            </div>
+            <input
+              value={groupName}
+              onChange={(e) => setGroupName(e.target.value)}
+              placeholder={lang === 'ar' ? 'اسم الجروب' : 'Group name'}
+              className="w-full px-3 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                placeholder={lang === 'ar' ? 'بحث عن مستخدم...' : 'Search user...'}
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+            </div>
+            <p className="text-[11px] font-black uppercase tracking-widest text-zinc-400">
+              {lang === 'ar' ? 'الأعضاء' : 'Members'}{memberIds.length > 0 ? ` · ${memberIds.length}` : ''}
+            </p>
+            <div className="max-h-64 overflow-y-auto space-y-1 -mx-1 px-1">
+              {groupUserList.length === 0 && (
+                <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا يوجد مستخدمون' : 'No users'}</p>
+              )}
+              {groupUserList.map((u: any) => {
+                const checked = memberIds.includes(u.id);
+                const isMe = u.id === user?.id;
+                return (
+                  <button key={u.id} disabled={isMe}
+                    onClick={() => setMemberIds((prev) => checked ? prev.filter((x) => x !== u.id) : [...prev, u.id])}
+                    className={cn("w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center justify-between gap-2",
+                      checked ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800", isMe && "opacity-60 cursor-default")}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{u.username}{isMe ? (lang === 'ar' ? ' (أنت)' : ' (You)') : ''}</p>
+                      <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tight truncate">{u.role_name}</p>
+                    </div>
+                    <div className={cn("w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0",
+                      checked || isMe ? "bg-brand border-brand" : "border-zinc-300 dark:border-zinc-600")}>
+                      {(checked || isMe) && <Check size={12} className="text-white" strokeWidth={4} />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={createGroup} disabled={!groupName.trim() || creatingGroup}
+              className="w-full px-4 py-3 rounded-xl bg-brand text-white text-sm font-black uppercase tracking-widest hover:opacity-90 disabled:opacity-50 transition-all">
+              {creatingGroup ? (lang === 'ar' ? 'جارٍ الإنشاء...' : 'Creating...') : (lang === 'ar' ? 'إنشاء الجروب' : 'Create Group')}
+            </button>
           </div>
         </div>
       )}
