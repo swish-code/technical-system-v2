@@ -46,7 +46,9 @@ jobs:
 
       - name: Build signed release AAB
         working-directory: android
-        run: ./gradlew bundleRelease --no-daemon
+        run: |
+          chmod +x ./gradlew
+          ./gradlew bundleRelease --no-daemon
         env:
           ANDROID_KEYSTORE_PATH: release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
