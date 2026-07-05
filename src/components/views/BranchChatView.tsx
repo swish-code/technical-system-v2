@@ -375,7 +375,7 @@ export default function BranchChatView() {
             {groupMessages.map((m) => {
               const mine = m.sender_id === user?.id;
               return (
-                <div key={m.id} className={cn("flex", mine ? "justify-end" : "justify-start")}>
+                <div key={m.id} className={cn("group flex", mine ? "justify-end" : "justify-start")}>
                   <div className={cn("max-w-[78%] rounded-2xl p-3 shadow-sm",
                     mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white")}>
                     <div className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-70">
@@ -387,7 +387,8 @@ export default function BranchChatView() {
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>{formatDate(m.created_at)}</div>
-                    <div className={cn("mt-1", mine ? "text-right" : "text-left")}>
+                    <div className={cn("mt-1", mine ? "text-right" : "text-left",
+                      (m.like_count ?? 0) === 0 && "sm:hidden sm:group-hover:block")}>
                       <button onClick={() => toggleLike('group', m.id)}
                         className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
                           m.liked_by_me
@@ -546,7 +547,8 @@ export default function BranchChatView() {
                       )}
                       <span className="opacity-60">{formatDate(m.created_at)}</span>
                     </div>
-                    <div className={cn("mt-1", mine ? "text-right" : "text-left")}>
+                    <div className={cn("mt-1", mine ? "text-right" : "text-left",
+                      (m.like_count ?? 0) === 0 && "sm:hidden sm:group-hover:block")}>
                       <button onClick={() => toggleLike('branch', m.id)}
                         className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
                           m.liked_by_me
