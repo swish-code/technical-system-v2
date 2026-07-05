@@ -26,6 +26,8 @@ interface ChatMessage {
   reply_has_image: boolean;
   reply_sender_role: string | null;
   answered: boolean;
+  like_count?: number;
+  liked_by_me?: boolean;
   resolved_at: string | null;
   resolve_reason: string | null;
   resolved_by_name: string | null;
@@ -327,6 +329,20 @@ export default function BranchChatView() {
     }
   }, [lastMessage]);
 
+  // Toggle a 👍 like on a message; refetch so the count updates immediately.
+  const toggleLike = async (messageType: 'branch' | 'group', messageId: number) => {
+    try {
+      const res = await fetchWithAuth(`${API_URL}/reactions/toggle`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message_type: messageType, message_id: messageId }),
+      });
+      if (res.ok) {
+        if (messageType === 'group') fetchGroupMessages(groupId);
+        else fetchMessages(branchId);
+      }
+    } catch { /* ignore */ }
+  };
+
   const activeGroup = groups.find((g) => g.id === groupId) || null;
   const groupUserList = allUsers
     .filter((u: any) => {
@@ -371,6 +387,15 @@ export default function BranchChatView() {
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>{formatDate(m.created_at)}</div>
+                    <div className={cn("mt-1", mine ? "text-right" : "text-left")}>
+                      <button onClick={() => toggleLike('group', m.id)}
+                        className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
+                          m.liked_by_me
+                            ? (mine ? "bg-white/25 text-white" : "bg-brand/15 text-brand")
+                            : (mine ? "bg-white/10 text-white/60 hover:bg-white/25" : "bg-zinc-200/60 dark:bg-zinc-700/50 text-zinc-400 hover:text-brand"))}>
+                        👍{(m.like_count ?? 0) > 0 ? ` ${m.like_count}` : ''}
+                      </button>
+                    </div>
                   </div>
                 </div>
               );
@@ -520,6 +545,15 @@ export default function BranchChatView() {
                         </span>
                       )}
                       <span className="opacity-60">{formatDate(m.created_at)}</span>
+                    </div>
+                    <div className={cn("mt-1", mine ? "text-right" : "text-left")}>
+                      <button onClick={() => toggleLike('branch', m.id)}
+                        className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
+                          m.liked_by_me
+                            ? (mine ? "bg-white/25 text-white" : "bg-brand/15 text-brand")
+                            : (mine ? "bg-white/10 text-white/60 hover:bg-white/25" : "bg-zinc-200/60 dark:bg-zinc-700/50 text-zinc-400 hover:text-brand"))}>
+                        👍{(m.like_count ?? 0) > 0 ? ` ${m.like_count}` : ''}
+                      </button>
                     </div>
                   </div>
                   {!mine && replyBtn}

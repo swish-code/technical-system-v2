@@ -837,6 +837,18 @@ async function initDb() {
   CREATE INDEX IF NOT EXISTS idx_group_messages_group ON group_messages(group_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_chat_group_members_user ON chat_group_members(user_id);
 
+  -- Message reactions (one 👍 like per user per message). message_type is
+  -- 'branch' or 'group' so a single table covers both chat kinds.
+  CREATE TABLE IF NOT EXISTS message_reactions (
+    message_type TEXT NOT NULL,
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    emoji TEXT NOT NULL DEFAULT '👍',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (message_type, message_id, user_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_message_reactions_msg ON message_reactions(message_type, message_id);
+
   CREATE TABLE IF NOT EXISTS hidden_items (
     id SERIAL PRIMARY KEY,
     user_id INTEGER NOT NULL,
@@ -7120,7 +7132,9 @@ async function startServer() {
              bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
              (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role,
              bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
-             (bm.sender_role = 'Restaurants' AND lo.t IS NOT NULL AND bm.created_at < lo.t) AS answered
+             (bm.sender_role = 'Restaurants' AND lo.t IS NOT NULL AND bm.created_at < lo.t) AS answered,
+             (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id)::int AS like_count,
+             EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id AND mr.user_id = $2) AS liked_by_me
       FROM branch_messages bm
       CROSS JOIN lo
       JOIN users u ON bm.sender_id = u.id
@@ -7129,7 +7143,7 @@ async function startServer() {
       LEFT JOIN users ru ON rm.sender_id = ru.id
       LEFT JOIN users reu ON bm.resolved_by = reu.id
       WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
-    `, [branch_id]);
+    `, [branch_id, user.id]);
 
     // Mark the OTHER side's messages as read for this viewer.
     const isRestaurant = user.role_name === 'Restaurants';
@@ -7375,12 +7389,14 @@ async function startServer() {
     if (!member) return res.status(403).json({ error: "Not a member of this group" });
     const msgs = await db.all(`
       SELECT gm.id, gm.group_id, gm.sender_id, gm.comment, gm.image_url, gm.image_type, gm.created_at,
-        u.username, r.name AS sender_role
+        u.username, r.name AS sender_role,
+        (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id)::int AS like_count,
+        EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id AND mr.user_id = $2) AS liked_by_me
       FROM group_messages gm
       JOIN users u ON gm.sender_id = u.id
       LEFT JOIN roles r ON u.role_id = r.id
       WHERE gm.group_id = $1 ORDER BY gm.created_at ASC
-    `, [groupId]);
+    `, [groupId, userId]);
     res.json(msgs);
   });
 
@@ -7400,6 +7416,33 @@ async function startServer() {
     `, [groupId, userId, comment, image_url, image_type]);
     res.json({ id: ins.rows[0].id });
     try { broadcast({ type: "GROUP_UPDATED", group_id: Number(groupId) }); } catch (e) { console.error("group broadcast failed", e); }
+  });
+
+  // Toggle a 👍 like on a message (branch or group). One like per user per message.
+  app.post("/api/reactions/toggle", authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const messageType = req.body.message_type;
+    const messageId = Number(req.body.message_id);
+    if ((messageType !== 'branch' && messageType !== 'group') || !messageId) {
+      return res.status(400).json({ error: "message_type ('branch'|'group') and message_id required" });
+    }
+    const existing = await db.get(`SELECT 1 FROM message_reactions WHERE message_type = $1 AND message_id = $2 AND user_id = $3`, [messageType, messageId, userId]);
+    if (existing) {
+      await db.query(`DELETE FROM message_reactions WHERE message_type = $1 AND message_id = $2 AND user_id = $3`, [messageType, messageId, userId]);
+    } else {
+      await db.query(`INSERT INTO message_reactions (message_type, message_id, user_id, emoji) VALUES ($1, $2, $3, '👍') ON CONFLICT DO NOTHING`, [messageType, messageId, userId]);
+    }
+    res.json({ liked: !existing });
+    // Tell the thread's viewers to refresh so the like count updates live.
+    try {
+      if (messageType === 'branch') {
+        const m = await db.get(`SELECT branch_id FROM branch_messages WHERE id = $1`, [messageId]) as any;
+        if (m) broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: m.branch_id });
+      } else {
+        const m = await db.get(`SELECT group_id FROM group_messages WHERE id = $1`, [messageId]) as any;
+        if (m) broadcast({ type: "GROUP_UPDATED", group_id: m.group_id });
+      }
+    } catch (e) { console.error("reaction broadcast failed", e); }
   });
 
   // Per-employee chat reply performance (replies sent + avg reply minutes).
