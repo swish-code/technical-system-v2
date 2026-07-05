@@ -7134,7 +7134,8 @@ async function startServer() {
              bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
              (bm.sender_role = 'Restaurants' AND lo.t IS NOT NULL AND bm.created_at < lo.t) AS answered,
              (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id)::int AS like_count,
-             EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id AND mr.user_id = $2) AS liked_by_me
+             EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id AND mr.user_id = $2) AS liked_by_me,
+             (SELECT string_agg(lu.username, ', ' ORDER BY mr.created_at) FROM message_reactions mr JOIN users lu ON lu.id = mr.user_id WHERE mr.message_type = 'branch' AND mr.message_id = bm.id) AS liked_by
       FROM branch_messages bm
       CROSS JOIN lo
       JOIN users u ON bm.sender_id = u.id
@@ -7391,7 +7392,8 @@ async function startServer() {
       SELECT gm.id, gm.group_id, gm.sender_id, gm.comment, gm.image_url, gm.image_type, gm.created_at,
         u.username, r.name AS sender_role,
         (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id)::int AS like_count,
-        EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id AND mr.user_id = $2) AS liked_by_me
+        EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id AND mr.user_id = $2) AS liked_by_me,
+        (SELECT string_agg(lu.username, ', ' ORDER BY mr.created_at) FROM message_reactions mr JOIN users lu ON lu.id = mr.user_id WHERE mr.message_type = 'group' AND mr.message_id = gm.id) AS liked_by
       FROM group_messages gm
       JOIN users u ON gm.sender_id = u.id
       LEFT JOIN roles r ON u.role_id = r.id

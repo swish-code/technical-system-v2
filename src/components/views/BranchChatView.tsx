@@ -28,6 +28,7 @@ interface ChatMessage {
   answered: boolean;
   like_count?: number;
   liked_by_me?: boolean;
+  liked_by?: string | null;
   resolved_at: string | null;
   resolve_reason: string | null;
   resolved_by_name: string | null;
@@ -390,6 +391,7 @@ export default function BranchChatView() {
                     <div className={cn("mt-1", mine ? "text-right" : "text-left",
                       (m.like_count ?? 0) === 0 && "sm:hidden sm:group-hover:block")}>
                       <button onClick={() => toggleLike('group', m.id)}
+                        title={m.liked_by ? (lang === 'ar' ? `أعجب: ${m.liked_by}` : `Liked by: ${m.liked_by}`) : undefined}
                         className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
                           m.liked_by_me
                             ? (mine ? "bg-white/25 text-white" : "bg-brand/15 text-brand")
@@ -550,6 +552,7 @@ export default function BranchChatView() {
                     <div className={cn("mt-1", mine ? "text-right" : "text-left",
                       (m.like_count ?? 0) === 0 && "sm:hidden sm:group-hover:block")}>
                       <button onClick={() => toggleLike('branch', m.id)}
+                        title={m.liked_by ? (lang === 'ar' ? `أعجب: ${m.liked_by}` : `Liked by: ${m.liked_by}`) : undefined}
                         className={cn("inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-black transition",
                           m.liked_by_me
                             ? (mine ? "bg-white/25 text-white" : "bg-brand/15 text-brand")
