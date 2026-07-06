@@ -7777,7 +7777,13 @@ async function startServer() {
   // Authenticated /uploads. Browsers send the swish_token cookie on <img>
   // and <a download> requests automatically (same-origin), so the existing
   // attachment_url paths in the frontend keep working.
-  app.use("/uploads", authenticate, express.static(uploadDir));
+  app.use("/uploads", authenticate, express.static(uploadDir, {
+    setHeaders: (res) => {
+      // Auth-gated + immutable (unique filenames) → cache privately in the
+      // browser for 30 days so images aren't re-downloaded on every revisit.
+      res.setHeader("Cache-Control", "private, max-age=2592000, immutable");
+    },
+  }));
   
   if (process.env.NODE_ENV !== "production") {
     console.log("Development mode: Starting Vite middleware...");

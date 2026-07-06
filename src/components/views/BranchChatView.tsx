@@ -102,6 +102,11 @@ export default function BranchChatView() {
   const [userSearch, setUserSearch] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  // Cache messages per branch so switching back shows them instantly, then a
+  // background refetch updates them. currentBranchRef guards against a slow
+  // response for a branch you've already navigated away from.
+  const messagesCache = useRef<Map<number, ChatMessage[]>>(new Map());
+  const currentBranchRef = useRef<number | null>(null);
 
   // Jump to (and briefly flash) the original message a quote points at.
   const jumpTo = (id: number) => {
@@ -157,7 +162,12 @@ export default function BranchChatView() {
     if (!bid) { setMessages([]); return; }
     try {
       const res = await fetchWithAuth(`${API_URL}/branch-chat?branch_id=${bid}`);
-      if (res.ok) setMessages(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        messagesCache.current.set(bid, data);
+        // Only paint if this branch is still the open one (guards fast switches).
+        if (currentBranchRef.current === bid) setMessages(data);
+      }
     } catch (e) { /* ignore */ }
   };
 
@@ -171,11 +181,14 @@ export default function BranchChatView() {
 
   useEffect(() => { fetchThreads(); fetchBranches(); }, []);
   useEffect(() => {
+    currentBranchRef.current = branchId;
+    if (branchId == null) { setMessages([]); return; }
+    // Show cached messages instantly so switching feels immediate...
+    setMessages(messagesCache.current.get(branchId) || []);
+    // ...then refresh from the server in the background and clear my unread badge.
     (async () => {
       await fetchMessages(branchId);
-      // Opening a branch bumps this user's read marker server-side; refresh the
-      // thread list so MY unread badge for it clears right away (per-user).
-      if (!isRestaurant && branchId != null) fetchThreads();
+      if (!isRestaurant && currentBranchRef.current === branchId) fetchThreads();
     })();
   }, [branchId]);
 
