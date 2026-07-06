@@ -7063,6 +7063,10 @@ async function startServer() {
   // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
   const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
   const CHAT_OFFICE_ROLES = ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  // Per-branch throttle (ms of last chat push per branch) so message bursts send
+  // at most one browser push per branch per minute — no flooding, no drowning out
+  // the busy alarms. The in-app unread badge still updates on every message.
+  const lastChatPushAt = new Map<number, number>();
 
   app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
     const user = (req as any).user;
@@ -7099,13 +7103,39 @@ async function startServer() {
     // Respond immediately; notifications/push run after (don't block the sender).
     res.json({ id: ins.rows[0].id });
 
-    // Chat is intentionally quiet: no popup, no sound, no browser push. With
-    // many messages those flooded the notification system (and drowned out the
-    // busy alarms). The only signal chat emits is BRANCH_CHAT_UPDATED, which
-    // drives the in-app unread badge/count — that's the sole chat indicator.
+    // Every message updates the in-app unread badge instantly.
     try {
       broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
     } catch (e) { console.error("branch-chat unread-badge broadcast failed", e); }
+
+    // Throttled browser push: at most ONE push per branch per minute, so bursts
+    // of messages can't flood the pipeline (the reason chat push was disabled) or
+    // drown out busy alarms. Only the OTHER side is notified (never the sender).
+    try {
+      const now = Date.now();
+      const key = Number(branch.id);
+      if (now - (lastChatPushAt.get(key) || 0) > 60000) {
+        lastChatPushAt.set(key, now);
+        const preview = comment ? (comment.length > 60 ? comment.slice(0, 60) + '…' : comment) : '📷 Photo';
+        if (fromRestaurant) {
+          // Restaurant messaged the office → alert the office chat team.
+          sendPushToRoles(CHAT_OFFICE_ROLES, {
+            title: `New chat · ${branch.name}`,
+            body: preview,
+            tag: `chat-${branch.id}`,
+            data: { type: "BRANCH_CHAT", branch_id: branch.id, url: `/?chat=${branch.id}` },
+          }).catch(e => console.error("chat push (office) failed", e));
+        } else {
+          // Office messaged the branch → alert that branch's restaurant only.
+          sendPushToRoles(["Restaurants"], {
+            title: "New chat message",
+            body: preview,
+            tag: `chat-${branch.id}`,
+            data: { type: "BRANCH_CHAT", branch_id: branch.id, url: `/?chat=${branch.id}` },
+          }, branch.id).catch(e => console.error("chat push (restaurant) failed", e));
+        }
+      }
+    } catch (e) { console.error("chat push throttle failed", e); }
   });
 
   app.get("/api/branch-chat", authenticate, authorize(CHAT_ROLES), async (req, res) => {
