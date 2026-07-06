@@ -7373,6 +7373,108 @@ async function startServer() {
     res.json(rows);
   });
 
+  // Monthly operations report as ONE professional Excel: Hide, Busy, and Chat
+  // first-response — each on its own sheet. Query: ?year=YYYY&month=M (1-12);
+  // defaults to the current month. Admins only (unrestricted roles).
+  app.get("/api/reports/monthly-export", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    try {
+      const nowD = new Date();
+      const year = parseInt(req.query.year as string) || nowD.getFullYear();
+      const month = parseInt(req.query.month as string) || (nowD.getMonth() + 1);
+      const pad = (n: number) => String(n).padStart(2, "0");
+      const start = `${year}-${pad(month)}-01`;
+      const end = `${month === 12 ? year + 1 : year}-${pad(month === 12 ? 1 : month + 1)}-01`;
+
+      // Hide & Busy requests. Restaurant comes from the requester's branch
+      // (unhide-request JSON has no branch name), falling back to the data JSON.
+      const reqRows = await db.all(`
+        SELECT pr.type,
+          COALESCE(rbr.name, pr.data::jsonb->>'brand_name', pr.data::jsonb->>'brand', '') AS brand,
+          COALESCE(rb.name, pr.data::jsonb->>'branch_name', pr.data::jsonb->>'branch', 'All Branches') AS restaurant,
+          UPPER(COALESCE(pr.data::jsonb->>'action', '')) AS action,
+          ru.username AS requested_by,
+          pr.created_at AS requested_at,
+          CASE WHEN pr.status <> 'Pending' THEN pr.updated_at END AS processed_at,
+          CASE WHEN pr.status <> 'Pending' THEN ROUND(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at)) / 60)::int END AS response_minutes,
+          pr.status,
+          pu.username AS processed_by
+        FROM pending_requests pr
+        LEFT JOIN users ru ON pr.user_id = ru.id
+        LEFT JOIN branches rb ON ru.branch_id = rb.id
+        LEFT JOIN brands rbr ON ru.brand_id = rbr.id
+        LEFT JOIN users pu ON pr.processed_by = pu.id
+        WHERE pr.created_at >= $1 AND pr.created_at < $2
+        ORDER BY pr.created_at
+      `, [start, end]);
+
+      // Chat first-response: each restaurant message immediately answered by an
+      // office reply (side flip), with the minutes between them.
+      const chatRows = await db.all(`
+        WITH ordered AS (
+          SELECT bm.branch_id, bm.created_at, bm.sender_role, bm.status, bm.comment,
+            b.name AS brand_name, br.name AS branch_name, u.username,
+            CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END AS side,
+            LAG(bm.created_at) OVER w AS prev_at,
+            LAG(CASE WHEN bm.sender_role = 'Restaurants' THEN 0 ELSE 1 END) OVER w AS prev_side,
+            LAG(bm.comment) OVER w AS prev_comment
+          FROM branch_messages bm
+          JOIN brands b ON bm.brand_id = b.id
+          JOIN branches br ON bm.branch_id = br.id
+          JOIN users u ON bm.sender_id = u.id
+          WINDOW w AS (PARTITION BY bm.branch_id ORDER BY bm.created_at, bm.id)
+        )
+        SELECT brand_name, branch_name, prev_at AS message_at, prev_comment AS message,
+          created_at AS first_reply_at, username AS replied_by, status,
+          ROUND(EXTRACT(EPOCH FROM (created_at - prev_at)) / 60)::int AS first_response_minutes
+        FROM ordered
+        WHERE prev_side = 0 AND side = 1 AND prev_at >= $1 AND prev_at < $2
+        ORDER BY brand_name, branch_name, message_at
+      `, [start, end]);
+
+      // pg returns naive timestamps parsed as UTC; format the UTC parts so the
+      // stored (Kuwait) value is shown as-is, with no timezone double-shift.
+      const fmt = (d: any) => {
+        if (!d) return "";
+        const dt = new Date(d);
+        return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())} ${pad(dt.getUTCHours())}:${pad(dt.getUTCMinutes())}`;
+      };
+      const typeLabel = (t: string, action: string) =>
+        t === "busy_branch" ? (action === "OPEN" ? "Open (Unbusy)" : "Busy")
+        : (action === "UNHIDE" ? "Unhide" : "Hide");
+      const reqRow = (r: any) => ({
+        "Restaurant": r.restaurant, "Brand": r.brand, "Type": typeLabel(r.type, r.action),
+        "Requested By": r.requested_by || "", "Requested At": fmt(r.requested_at),
+        "Approved/Processed At": fmt(r.processed_at), "Response Time (min)": r.response_minutes ?? "",
+        "Status": r.status, "Processed By": r.processed_by || "",
+      });
+
+      const wb = XLSX.utils.book_new();
+      const addSheet = (name: string, rows: any[], headers: string[]) => {
+        const data = rows.length ? rows : [Object.fromEntries(headers.map((h) => [h, ""]))];
+        const ws = XLSX.utils.json_to_sheet(data, { header: headers });
+        ws["!cols"] = headers.map((h) => ({ wch: Math.max(16, h.length + 2) }));
+        XLSX.utils.book_append_sheet(wb, ws, name);
+      };
+      const reqHeaders = ["Restaurant", "Brand", "Type", "Requested By", "Requested At", "Approved/Processed At", "Response Time (min)", "Status", "Processed By"];
+      addSheet("Hide Requests", reqRows.filter((r: any) => r.type === "hide_unhide").map(reqRow), reqHeaders);
+      addSheet("Busy Requests", reqRows.filter((r: any) => r.type === "busy_branch").map(reqRow), reqHeaders);
+      addSheet("Chat Requests", chatRows.map((r: any) => ({
+        "Restaurant": r.branch_name, "Brand": r.brand_name, "Message": r.message || "",
+        "Message At": fmt(r.message_at), "First Reply At": fmt(r.first_reply_at),
+        "First Response Time (min)": r.first_response_minutes ?? "", "Replied By": r.replied_by || "", "Status": r.status || "",
+      })), ["Restaurant", "Brand", "Message", "Message At", "First Reply At", "First Response Time (min)", "Replied By", "Status"]);
+
+      const buf = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
+      const monthName = new Date(Date.UTC(year, month - 1, 1)).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      res.setHeader("Content-Disposition", `attachment; filename="Swish-Report-${monthName}-${year}.xlsx"`);
+      res.send(buf);
+    } catch (e) {
+      console.error("monthly-export failed", e);
+      res.status(500).json({ error: "Failed to generate report" });
+    }
+  });
+
   // ===== Group chat (admin-created, member-scoped, multi-user) =====
   const GROUP_ADMIN_ROLES = ["Manager"]; // only admins can create groups
 
