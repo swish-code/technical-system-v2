@@ -4847,22 +4847,28 @@ async function startServer() {
 
   // Product Codes (Coding Team)
   app.post("/api/products/:id/code", authenticate, authorize(["Coding Team", "Technical Team", "Technical Back Office", "Manager", "Super Visor"]), async (req, res) => {
-    const { productCode, modifierGroups } = req.body;
+    // Read the snake_case body the client actually sends (product_code /
+    // modifier_groups). Reading camelCase here left them undefined, so `code`
+    // hit its NOT NULL constraint and every PLU save 500'd.
+    const { product_code, modifier_groups } = req.body;
     const productId = req.params.id;
-    
+
     try {
       await db.transaction(async (client) => {
-        // 1. Product Code
-        const existingProductCode = await db.get("SELECT id FROM product_codes WHERE product_id = $1", [productId]);
-        if (existingProductCode) {
-          await client.query("UPDATE product_codes SET code = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP WHERE product_id = $3", [productCode, (req as any).user.id, productId]);
-        } else {
-          await client.query("INSERT INTO product_codes (product_id, code, updated_by) VALUES ($1, $2, $3)", [productId, productCode, (req as any).user.id]);
+        // 1. Product Code — only when a real PLU was entered (skip empty so it
+        //    can't violate the NOT NULL column).
+        if (product_code != null && String(product_code).trim() !== '') {
+          const existingProductCode = await db.get("SELECT id FROM product_codes WHERE product_id = $1", [productId]);
+          if (existingProductCode) {
+            await client.query("UPDATE product_codes SET code = $1, updated_by = $2, updated_at = CURRENT_TIMESTAMP WHERE product_id = $3", [product_code, (req as any).user.id, productId]);
+          } else {
+            await client.query("INSERT INTO product_codes (product_id, code, updated_by) VALUES ($1, $2, $3)", [productId, product_code, (req as any).user.id]);
+          }
         }
 
         // 2. Modifier Groups and Options Codes
-        if (modifierGroups && Array.isArray(modifierGroups)) {
-          for (const group of modifierGroups) {
+        if (modifier_groups && Array.isArray(modifier_groups)) {
+          for (const group of modifier_groups) {
             await client.query("UPDATE modifier_groups SET code = $1 WHERE id = $2", [group.code, group.id]);
             if (group.options && Array.isArray(group.options)) {
               for (const option of group.options) {
@@ -4874,7 +4880,7 @@ async function startServer() {
       });
       
       broadcast({ type: "CODE_UPDATED", productId });
-      await logAction((req as any).user.id, "UPDATE_CODES", "products", Number(productId), null, { productCode, modifierGroups });
+      await logAction((req as any).user.id, "UPDATE_CODES", "products", Number(productId), null, { product_code, modifier_groups });
       res.json({ success: true });
     } catch (error) {
       console.error("Update product code error:", error);
