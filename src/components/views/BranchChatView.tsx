@@ -242,6 +242,25 @@ export default function BranchChatView() {
     e.target.value = '';
   };
 
+  // Paste an image from the clipboard (e.g. a screenshot) straight into the composer.
+  const handlePaste = (e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (const item of Array.from(items)) {
+      if (item.type.startsWith('image/')) {
+        const f = item.getAsFile();
+        if (f) {
+          setImage(f);
+          const r = new FileReader();
+          r.onloadend = () => setImagePreview(r.result as string);
+          r.readAsDataURL(f);
+          e.preventDefault();
+        }
+        break;
+      }
+    }
+  };
+
   const send = async () => {
     if (!branchId || (!comment.trim() && !image) || sending) return;
     setSending(true);
@@ -495,6 +514,7 @@ export default function BranchChatView() {
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGroup(); } }}
+                onPaste={handlePaste}
                 placeholder={lang === 'ar' ? 'اكتب رسالة...' : 'Write a message...'}
                 className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
               <button onClick={sendGroup} disabled={sending || (!comment.trim() && !image)}
@@ -685,6 +705,7 @@ export default function BranchChatView() {
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                onPaste={handlePaste}
                 placeholder={lang === 'ar' ? 'اكتب تعليقًا...' : 'Write a comment...'}
                 className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
               />
