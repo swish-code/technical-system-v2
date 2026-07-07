@@ -12,7 +12,7 @@ export default function TechnicalBackOfficeView() {
   const { lang, user } = useAuth();
   const { fetchWithAuth } = useFetch();
 
-  if (!user || !['Technical Back Office', 'Manager', 'Super Visor', 'Restaurants', 'Call Center', 'Area Manager', 'Operation Manager'].includes(user.role_name)) {
+  if (!user || !['Technical Back Office', 'Manager', 'Super Visor', 'Restaurants', 'Call Center', 'Complain Team', 'Area Manager', 'Operation Manager'].includes(user.role_name)) {
     return (
       <div className="flex items-center justify-center h-64">
         <p className="text-zinc-500 font-bold">{lang === 'en' ? 'Access Denied' : 'غير مسموح بالدخول'}</p>
@@ -20,7 +20,7 @@ export default function TechnicalBackOfficeView() {
     );
   }
 
-  const [activeTab, setActiveTab] = useState<'busy' | 'database' | 'technical'>(user?.role_name === 'Call Center' ? 'database' : 'busy');
+  const [activeTab, setActiveTab] = useState<'busy' | 'database' | 'technical'>(user?.role_name === 'Call Center' || user?.role_name === 'Complain Team' ? 'database' : 'busy');
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState<{ message: string, type: 'success' | 'error' } | null>(null);
   
@@ -213,7 +213,7 @@ export default function TechnicalBackOfficeView() {
   const renderTabSwitcher = () => (
     <div className="flex items-center gap-4 bg-white dark:bg-zinc-900 p-2 rounded-2xl border border-zinc-100 dark:border-zinc-800 w-full sm:w-fit self-center overflow-x-auto no-scrollbar">
       <div className="flex items-center gap-4 min-w-max">
-        {user?.role_name !== 'Call Center' && (
+        {user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (
           <button
             onClick={() => setActiveTab('busy')}
             className={cn(
@@ -227,7 +227,7 @@ export default function TechnicalBackOfficeView() {
             {t.busyTab}
           </button>
         )}
-        {(   user?.role_name === 'Manager' ||   user?.role_name === 'Super Visor' ||   user?.role_name === 'Technical Back Office' ||   user?.role_name === 'Call Center' ||   user?.role_name === 'Restaurants' ||   user?.role_name === 'Operation Manager' ||   user?.role_name === 'Area Manager' ) && (
+        {(   user?.role_name === 'Manager' ||   user?.role_name === 'Super Visor' ||   user?.role_name === 'Technical Back Office' ||   user?.role_name === 'Call Center' ||   user?.role_name === 'Complain Team' ||   user?.role_name === 'Restaurants' ||   user?.role_name === 'Operation Manager' ||   user?.role_name === 'Area Manager' ) && (
           <button
             onClick={() => setActiveTab('database')}
             className={cn(

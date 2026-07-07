@@ -203,7 +203,7 @@ export default function Dashboard() {
     } else if (lastMessage?.type === 'DEDICATION_ALERT') {
       const alertData = lastMessage.data;
       const isRelevant = 
-        (user?.role_name === 'Call Center' && user.id === alertData.call_center_user_id) ||
+        ((user?.role_name === 'Call Center' || user?.role_name === 'Complain Team') && user.id === alertData.call_center_user_id) ||
         (user?.role_name === 'Restaurants' && 
           (user.brand_id === alertData.brand_id || user.brand_ids?.includes(alertData.brand_id)) &&
           (!user.branch_id || user.branch_id === alertData.branch_id));
@@ -265,22 +265,22 @@ export default function Dashboard() {
   }[lang];
 
   const menuItems = [
-    { id: 'products', label: t.products, icon: Package, roles: ["Marketing Team", "Technical Team", "Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager"] },
+    { id: 'products', label: t.products, icon: Package, roles: ["Marketing Team", "Technical Team", "Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'coding', label: t.coding, icon: Tag, roles: ["Coding Team", "Technical Team", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'technical', label: t.technical, icon: Code, roles: ["Technical Team", "Manager", "Marketing Team", "Restaurants", "Super Visor", "Operation Manager"] },
     { id: 'fields', label: t.fields, icon: Settings, roles: ["Manager"] },
-    { id: 'hide_unhide', label: t.hideUnhide, icon: EyeOff, roles: ["Technical Back Office", "Manager", "Call Center", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"] },
+    { id: 'hide_unhide', label: t.hideUnhide, icon: EyeOff, roles: ["Technical Back Office", "Manager", "Call Center", "Complain Team", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"] },
     { id: 'hide_item_config', label: t.hideItemConfig, icon: Settings, roles: ["Manager"] },
-    { id: 'late_orders', label: t.lateOrders, icon: Clock, roles: ["Call Center", "Restaurants", "Manager", "Technical Back Office", "Super Visor", "Area Manager", "Operation Manager"] },
-    { id: 'branch_chat', label: t.branchChat, icon: MessageSquare, roles: ["Restaurants", "Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"] },
-    { id: 'busy_periods', label: t.busyPeriods, icon: AlertCircle, roles: ["Technical Back Office", "Manager", "Restaurants", "Super Visor", "Call Center", "Area Manager", "Operation Manager"] },
+    { id: 'late_orders', label: t.lateOrders, icon: Clock, roles: ["Call Center", "Complain Team", "Restaurants", "Manager", "Technical Back Office", "Super Visor", "Area Manager", "Operation Manager"] },
+    { id: 'branch_chat', label: t.branchChat, icon: MessageSquare, roles: ["Restaurants", "Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager", "Area Manager"] },
+    { id: 'busy_periods', label: t.busyPeriods, icon: AlertCircle, roles: ["Technical Back Office", "Manager", "Restaurants", "Super Visor", "Call Center", "Complain Team", "Area Manager", "Operation Manager"] },
     { id: 'requests_branch', label: t.requestsBranch, icon: Inbox, roles: ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'orders', label: t.orders, icon: FileText, roles: ["Restaurants"] },
     { id: 'busy_config', label: t.busyConfig, icon: Settings, roles: ["Manager", "Operation Manager"] },
     { id: 'call_center_config', label: t.callCenterConfig, icon: Settings, roles: ["Manager", "Super Visor", "Operation Manager"] },
     { id: 'logs', label: t.logs, icon: History, roles: ["Manager", "Super Visor", "Operation Manager"] },
     { id: 'analytics', label: t.analytics, icon: BarChart3, roles: ["Manager", "Super Visor", "Area Manager", "Operation Manager"] },
-    { id: 'user_kpi', label: t.myKpi, icon: Activity, roles: ["Marketing Team", "Technical Team", "Technical Back Office", "Call Center", "Coding Team", "Super Visor", "Operation Manager"] },
+    { id: 'user_kpi', label: t.myKpi, icon: Activity, roles: ["Marketing Team", "Technical Team", "Technical Back Office", "Call Center", "Complain Team", "Coding Team", "Super Visor", "Operation Manager"] },
     { id: 'users', label: t.users, icon: Users, roles: ["Manager", "Super Visor"] },
   ].filter(item => item.roles.includes(user?.role_name || ''));
 
@@ -324,6 +324,7 @@ export default function Dashboard() {
         return <MarketingView />;
       }
       switch (role) {
+        case 'Complain Team':
         case 'Call Center': return <CallCenterView />;
         case 'Manager':
         case 'Super Visor': return <MarketingView isManager />;

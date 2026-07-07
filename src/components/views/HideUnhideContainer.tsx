@@ -12,7 +12,7 @@ import { Inbox } from 'lucide-react';
 export default function HideUnhideContainer() {
   const { user, lang } = useAuth();
   const [activeTab, setActiveTab] = useState<'hide' | 'unhide' | 'history'>(
-    user?.role_name === 'Call Center' ? 'unhide' : 'hide'
+    user?.role_name === 'Call Center' || user?.role_name === 'Complain Team' ? 'unhide' : 'hide'
   );
 
   const t = {
@@ -30,8 +30,8 @@ export default function HideUnhideContainer() {
 
   const tabs = [
     { id: 'hide', label: t.hide, icon: EyeOff, roles: ["Technical Back Office", "Manager", "Super Visor", "Restaurants", "Area Manager"] },
-    { id: 'unhide', label: t.unhide, icon: RefreshCw, roles: ["Technical Back Office", "Manager", "Call Center", "Super Visor", "Restaurants", "Area Manager"] },
-    { id: 'history', label: t.history, icon: History, roles: ["Technical Back Office", "Manager", "Call Center", "Super Visor", "Restaurants", "Area Manager"] },
+    { id: 'unhide', label: t.unhide, icon: RefreshCw, roles: ["Technical Back Office", "Manager", "Call Center", "Complain Team", "Super Visor", "Restaurants", "Area Manager"] },
+    { id: 'history', label: t.history, icon: History, roles: ["Technical Back Office", "Manager", "Call Center", "Complain Team", "Super Visor", "Restaurants", "Area Manager"] },
   ].filter(tab => tab.roles.includes(user?.role_name || ''));
 
   return (

@@ -423,7 +423,7 @@ export default function BusyPeriodsDatabaseView() {
                     </td>
                     <td className="px-8 py-6 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        {!record.end_time && user?.role_name !== 'Call Center' && (user?.role_name !== 'Restaurants' || record.branch === (user as any).branch_name) && (
+                        {!record.end_time && user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (user?.role_name !== 'Restaurants' || record.branch === (user as any).branch_name) && (
                           <button
                             onClick={() => handleOpen(record)}
                             disabled={updating}
@@ -440,7 +440,7 @@ export default function BusyPeriodsDatabaseView() {
                         >
                           <MessageCircle size={18} />
                         </button>
-                        {user?.role_name !== 'Call Center' && user?.role_name !== 'Restaurants' && (
+                        {user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && user?.role_name !== 'Restaurants' && (
                           <button
                             onClick={() => {
                               setEditingRecord(record);
@@ -519,7 +519,7 @@ export default function BusyPeriodsDatabaseView() {
                     <p className="text-[10px] font-black text-zinc-400 dark:text-zinc-500 uppercase tracking-widest mb-3">Comment</p>
                     <p className="text-zinc-600 dark:text-zinc-400 leading-relaxed font-medium italic">"{selectedRecord.comment || 'No comment provided'}"</p>
                   </div>
-                  {selectedRecord.internal_notes && user?.role_name !== 'Call Center' && (
+                  {selectedRecord.internal_notes && user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (
                     <div className="p-6 bg-amber-50 dark:bg-amber-500/10 rounded-3xl border border-amber-100 dark:border-amber-500/20">
                       <p className="text-[10px] font-black text-amber-600/60 uppercase tracking-widest mb-3">Internal Notes</p>
                       <p className="text-amber-900 dark:text-amber-200 leading-relaxed font-medium">{selectedRecord.internal_notes}</p>

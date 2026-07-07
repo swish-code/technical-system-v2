@@ -1083,6 +1083,7 @@ export default function ManagerView({ activeTab }: { activeTab: string }) {
                       )}
                     </div>
                   ) : (roles.find(r => r.id === formData.role_id)?.name === 'Call Center' ||
+                       roles.find(r => r.id === formData.role_id)?.name === 'Complain Team' ||
                        roles.find(r => r.id === formData.role_id)?.name === 'Marketing Team' ||
                        roles.find(r => r.id === formData.role_id)?.name === 'Operation Manager') && (
                     <div className="space-y-3 animate-in fade-in slide-in-from-top-2 duration-300">

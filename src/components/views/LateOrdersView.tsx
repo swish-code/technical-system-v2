@@ -14,7 +14,7 @@ export default function LateOrdersView() {
   const { fetchWithAuth } = useFetch();
   const lastMessage = useWebSocket();
   
-  const isCallCenter = user?.role_name === 'Call Center';
+  const isCallCenter = user?.role_name === 'Call Center' || user?.role_name === 'Complain Team';
   const isRestaurant = user?.role_name === 'Restaurants';
   const isTechnicalBackOffice = user?.role_name === 'Technical Back Office';
   const isAreaManager = user?.role_name === 'Area Manager';
@@ -497,11 +497,11 @@ export default function LateOrdersView() {
     let received = 0;
     if (selectedUser.role_name === 'Restaurants') {
       const userBranchIds = selectedUser.branch_ids || (selectedUser.branch_id ? [selectedUser.branch_id] : []);
-      received = filteredByDate.filter(o => 
-        o.creator_role === 'Call Center' && 
+      received = filteredByDate.filter(o =>
+        (o.creator_role === 'Call Center' || o.creator_role === 'Complain Team') &&
         userBranchIds.includes(o.branch_id)
       ).length;
-    } else if (selectedUser.role_name === 'Call Center' || selectedUser.role_name === 'Technical Back Office') {
+    } else if (selectedUser.role_name === 'Call Center' || selectedUser.role_name === 'Complain Team' || selectedUser.role_name === 'Technical Back Office') {
       received = filteredByDate.filter(o => o.creator_role === 'Restaurants').length;
     } else if (selectedUser.role_name === 'Area Manager') {
       const userBranchIds = selectedUser.branch_ids || [];

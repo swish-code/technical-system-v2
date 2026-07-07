@@ -465,7 +465,7 @@ export default function UnhideItemView() {
           </div>
 
           <div className="flex flex-col sm:flex-row items-center gap-3 md:gap-6 w-full md:w-auto">
-            {user?.role_name !== 'Call Center' && (
+            {user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (
               <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
                 <button 
                   onClick={() => handleUnhide(selectedIds)}
@@ -649,7 +649,7 @@ export default function UnhideItemView() {
                             >
                               <MessageCircle size={18} />
                             </button>
-                            {user?.role_name !== 'Call Center' && (
+                            {user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (
                               <>
                                 <button 
                                   onClick={(e) => {
@@ -774,7 +774,7 @@ export default function UnhideItemView() {
                         >
                           <MessageCircle size={16} />
                         </button>
-                        {user?.role_name !== 'Call Center' && (
+                        {user?.role_name !== 'Call Center' && user?.role_name !== 'Complain Team' && (
                           <>
                             <button
                               onClick={(e) => {

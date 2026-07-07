@@ -362,6 +362,7 @@ async function seedData() {
     "Area Manager",
     "Restaurants",
     "Call Center",
+    "Complain Team",
     "Marketing Team",
     "Coding Team",
     "Operation Manager"
@@ -1016,7 +1017,7 @@ try {
     console.log("Added Ingredients dynamic field");
   }
 
-  const roles = ["Marketing Team", "Coding Team", "Technical Team", "Call Center", "Technical Back Office", "Manager", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"];
+  const roles = ["Marketing Team", "Coding Team", "Technical Team", "Call Center", "Complain Team", "Technical Back Office", "Manager", "Restaurants", "Super Visor", "Area Manager", "Operation Manager"];
   for (const roleName of roles) {
     const exists = await db.get("SELECT id FROM roles WHERE name = $1", [roleName]);
     if (!exists) {
@@ -2927,7 +2928,11 @@ async function startServer() {
   // Middleware: Role check
   const authorize = (roles: string[]) => (req: any, res: any, next: any) => {
     if (!req.user) return res.status(401).json({ error: "Unauthorized" });
-    if (!roles.includes(req.user.role_name)) {
+    // "Complain Team" is a clone of "Call Center": it inherits Call Center's
+    // access, so any endpoint that permits Call Center also permits it.
+    const effectiveRole = (req.user.role_name === 'Complain Team' && !roles.includes('Complain Team'))
+      ? 'Call Center' : req.user.role_name;
+    if (!roles.includes(effectiveRole)) {
       console.warn(`Access denied for user ${req.user.username}. Role ${req.user.role_name} not in ${roles.join(", ")}`);
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -3499,7 +3504,7 @@ async function startServer() {
           // branch. The browser-side filter narrows further to the actual user.
           broadcast({
             type: "DEDICATION_ALERT",
-            role_target: ["Call Center", "Restaurants"],
+            role_target: ["Call Center", "Complain Team", "Restaurants"],
             data: {
               id: alert.id,
               order_id: alert.order_id,
@@ -3521,7 +3526,7 @@ async function startServer() {
             message_ar: `حان وقت معالجة الإهداء للطلب رقم #${alert.order_id}`,
             brand_id: alert.brand_id,
             branch_id: alert.branch_id,
-            role_target: ["Call Center", "Restaurants", "Manager", "Super Visor"]
+            role_target: ["Call Center", "Complain Team", "Restaurants", "Manager", "Super Visor"]
           });
 
           await db.query("UPDATE late_order_requests SET alert_sent = 1 WHERE id = $1", [alert.id]);
@@ -3774,7 +3779,7 @@ async function startServer() {
       // an office-created case alerts that restaurant branch (scoped).
       const creatorIsRestaurant = (req as any).user.role_name === 'Restaurants';
       const newCaseRecipients = creatorIsRestaurant
-        ? ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager"]
+        ? ["Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager"]
         : ["Restaurants", "Area Manager", "Manager", "Super Visor"];
 
       broadcast({
@@ -3838,7 +3843,7 @@ async function startServer() {
     const conditions: string[] = [];
 
     // Role-based base conditions
-    if (user.role_name === 'Call Center') {
+    if (user.role_name === 'Call Center' || user.role_name === 'Complain Team') {
       if (restriction) {
         const placeholders = restriction.brands.map((_: any, i: number) => `$${params.length + i + 1}`).join(',');
         conditions.push(`b.name ${restriction.type === 'include' ? 'IN' : 'NOT IN'} (${placeholders})`);
@@ -3911,7 +3916,7 @@ async function startServer() {
 
     // Tab filtering logic
     if (activeTab) {
-      if (user.role_name === 'Call Center' || user.role_name === 'Technical Back Office') {
+      if (user.role_name === 'Call Center' || user.role_name === 'Complain Team' || user.role_name === 'Technical Back Office') {
         if (activeTab === 'restaurant') {
           conditions.push("r.name = 'Restaurants'");
         } else {
@@ -4029,7 +4034,7 @@ async function startServer() {
         const preview = (restaurant_message || '').toString().slice(0, 80);
         // Recipients: restaurant reply -> office; office reply -> the restaurant branch.
         const recipients = fromRestaurant
-          ? ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager"]
+          ? ["Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager"]
           : ["Restaurants"];
 
         broadcast({
@@ -5661,7 +5666,7 @@ async function startServer() {
         message_ar: `تم إخفاء عناصر في فرع ${branch_id}`,
         brand_id,
         branch_id,
-        role_target: ["Manager", "Super Visor", "Area Manager", "Call Center"]
+        role_target: ["Manager", "Super Visor", "Area Manager", "Call Center", "Complain Team"]
       });
       broadcast({ type: "HIDDEN_ITEMS_UPDATED" });
       res.json({ success: true });
@@ -6315,7 +6320,7 @@ async function startServer() {
 
     // Manual edit by an admin/manager to correct a wrongly recorded start/end time.
     if (req.body.manual_edit === true) {
-      if (user.role_name === 'Call Center' || user.role_name === 'Restaurants') {
+      if (user.role_name === 'Call Center' || user.role_name === 'Complain Team' || user.role_name === 'Restaurants') {
         return res.status(403).json({ error: "Not authorized to edit records" });
       }
       const newStart = (start_time ?? record.start_time);
@@ -7172,8 +7177,8 @@ async function startServer() {
   });
 
   // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
-  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
-  const CHAT_OFFICE_ROLES = ["Technical Back Office", "Call Center", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  const CHAT_ROLES = ["Restaurants", "Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
+  const CHAT_OFFICE_ROLES = ["Technical Back Office", "Call Center", "Complain Team", "Manager", "Super Visor", "Operation Manager", "Area Manager"];
   // Per-branch throttle (ms of last chat push per branch) so message bursts send
   // at most one browser push per branch per minute — no flooding, no drowning out
   // the busy alarms. The in-app unread badge still updates on every message.
@@ -7745,7 +7750,7 @@ async function startServer() {
     return { conds, params };
   };
 
-  const CHAT_KPI_ROLES = ["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"];
+  const CHAT_KPI_ROLES = ["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Complain Team", "Technical Team", "Coding Team", "Marketing Team"];
 
   app.get("/api/reports/chat-target", authenticate, async (_req, res) => {
     const row = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;

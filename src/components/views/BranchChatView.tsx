@@ -50,6 +50,7 @@ interface Thread {
 const ROLE_LABELS: Record<string, { ar: string; en: string }> = {
   'Restaurants': { ar: 'مطعم', en: 'Restaurant' },
   'Call Center': { ar: 'كول سنتر', en: 'Call Center' },
+  'Complain Team': { ar: 'فريق الشكاوى', en: 'Complain Team' },
   'Technical Back Office': { ar: 'باك أوفيس', en: 'Back Office' },
   'Technical Team': { ar: 'تكنيكال', en: 'Tech' },
   'Manager': { ar: 'مدير', en: 'Manager' },

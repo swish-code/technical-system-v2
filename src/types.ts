@@ -1,6 +1,6 @@
 import { LucideIcon } from "lucide-react";
 
-export type Role = "Marketing Team" | "Coding Team" | "Technical Team" | "Call Center" | "Technical Back Office" | "Manager" | "Restaurants" | "Super Visor" | "Area Manager" | "Operation Manager";
+export type Role = "Marketing Team" | "Coding Team" | "Technical Team" | "Call Center" | "Complain Team" | "Technical Back Office" | "Manager" | "Restaurants" | "Super Visor" | "Area Manager" | "Operation Manager";
 
 export interface AppNotification {
   id: string;
