@@ -117,7 +117,11 @@ export default function HistoryView() {
         const data = JSON.parse(log.new_value || log.old_value || '{}');
         const productId = log.action === 'EDIT_HIDDEN_ITEM' ? data.product_id : log.target_id;
         const branch = data.branch_name || data.branch || data.branches || 'All Branches';
-        const key = `${productId}-${branch}`;
+        // Pair hide↔unhide by numeric branch_id (reliable). The branch NAME can
+        // differ between the two logs (e.g. "Egaila" vs "All Branches"), which
+        // used to leave unhidden items stuck as "STILL HIDDEN" with a wrong
+        // duration. Fall back to the name for older logs that predate branch_id.
+        const key = `${productId}-${data.branch_id ?? branch}`;
 
         if (log.action === 'HIDE') {
           const session: GroupedLog = {

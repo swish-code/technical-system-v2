@@ -5771,7 +5771,10 @@ async function startServer() {
         const data = JSON.parse(log.new_value || log.old_value || '{}');
         const productId = log.action === 'EDIT_HIDDEN_ITEM' ? data.product_id : log.target_id;
         const branch = data.branch_name || data.branch || data.branches || 'All Branches';
-        const key = `${productId}-${branch}`;
+        // Pair by numeric branch_id (reliable); the branch NAME can differ between
+        // the hide and unhide logs and used to leave unhidden items as "still
+        // hidden". Fall back to the name for older logs that predate branch_id.
+        const key = `${productId}-${data.branch_id ?? branch}`;
 
         if (log.action === 'HIDE') {
           const session = {
