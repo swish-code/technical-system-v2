@@ -101,6 +101,8 @@ export default function BranchChatView() {
   const [memberIds, setMemberIds] = useState<number[]>([]);
   const [userSearch, setUserSearch] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
+  const [chatUsers, setChatUsers] = useState<any[]>([]);
+  const [chatSearch, setChatSearch] = useState('');
   const endRef = useRef<HTMLDivElement>(null);
   // Cache messages per branch so switching back shows them instantly, then a
   // background refetch updates them. currentBranchRef guards against a slow
@@ -364,6 +366,62 @@ export default function BranchChatView() {
       return !q || (u.username || '').toLowerCase().includes(q) || (u.role_name || '').toLowerCase().includes(q);
     });
 
+  // --- @mention autocomplete + in-conversation search ---
+  const fetchChatUsers = async () => {
+    try { const res = await fetchWithAuth(`${API_URL}/chat-users`); if (res.ok) setChatUsers(await res.json()); } catch { /* ignore */ }
+  };
+  useEffect(() => { fetchChatUsers(); }, []);
+
+  const usernameSet = new Set(chatUsers.map((u: any) => (u.username || '').toLowerCase()));
+  const mentionMatch = comment.match(/@(\w*)$/);
+  const mentionQuery = mentionMatch ? mentionMatch[1].toLowerCase() : null;
+  const mentionResults = mentionQuery !== null
+    ? chatUsers.filter((u: any) => (u.username || '').toLowerCase().includes(mentionQuery)).slice(0, 6)
+    : [];
+  const insertMention = (username: string) => setComment(comment.replace(/@(\w*)$/, `@${username} `));
+
+  // Render a message body with @mentions (matching a real username) highlighted.
+  const renderComment = (text: string | null) => {
+    if (!text) return null;
+    return text.split(/(@\w+)/g).map((part, i) =>
+      part[0] === '@' && usernameSet.has(part.slice(1).toLowerCase())
+        ? <span key={i} className="font-black text-brand bg-brand/10 rounded px-0.5">{part}</span>
+        : <React.Fragment key={i}>{part}</React.Fragment>
+    );
+  };
+
+  // @mention dropdown, shared by both composers (they use the same `comment`).
+  const MentionBox = mentionResults.length > 0 ? (
+    <div className="mb-2 max-h-44 overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg">
+      {mentionResults.map((u: any) => (
+        <button key={u.id} onClick={() => insertMention(u.username)}
+          className="w-full text-left px-3 py-2 hover:bg-brand/10 transition flex items-center justify-between gap-2">
+          <span className="text-sm font-black text-zinc-900 dark:text-white truncate">@{u.username}</span>
+          <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-tight truncate">{u.role_name}</span>
+        </button>
+      ))}
+    </div>
+  ) : null;
+
+  const searchLc = chatSearch.trim().toLowerCase();
+  const SearchBar = (
+    <div className="px-6 pt-3 pb-2 border-b border-zinc-100 dark:border-zinc-800">
+      <div className="relative">
+        <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+        <input value={chatSearch} onChange={(e) => setChatSearch(e.target.value)}
+          placeholder={lang === 'ar' ? 'بحث في المحادثة...' : 'Search this conversation...'}
+          className="w-full pl-9 pr-8 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-xs font-medium outline-none border border-zinc-200 dark:border-zinc-700 focus:border-brand text-zinc-900 dark:text-white" />
+        {chatSearch && <button onClick={() => setChatSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-red-500"><X size={14} /></button>}
+      </div>
+    </div>
+  );
+  useEffect(() => {
+    if (!searchLc) return;
+    const list: any[] = groupId ? groupMessages : messages;
+    const hit = list.find((m) => (m.comment || '').toLowerCase().includes(searchLc));
+    if (hit) document.getElementById(`bchat-msg-${hit.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }, [chatSearch]);
+
   const GroupPane = (
     <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
       {!groupId ? (
@@ -380,6 +438,7 @@ export default function BranchChatView() {
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'محادثة جماعية' : 'Group chat'}</p>
             </div>
           </div>
+          {SearchBar}
           <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
             {groupMessages.length === 0 && (
               <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
@@ -389,9 +448,10 @@ export default function BranchChatView() {
             {groupMessages.map((m) => {
               const mine = m.sender_id === user?.id;
               return (
-                <div key={m.id} className={cn("group flex", mine ? "justify-end" : "justify-start")}>
+                <div key={m.id} id={`bchat-msg-${m.id}`} className={cn("group flex", mine ? "justify-end" : "justify-start")}>
                   <div className={cn("max-w-[78%] rounded-2xl p-3 shadow-sm",
-                    mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white")}>
+                    mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
+                    searchLc && (m.comment || '').toLowerCase().includes(searchLc) && "ring-2 ring-amber-400")}>
                     <div className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-70">
                       {m.username} · {roleLabel(m.sender_role, lang)}
                     </div>
@@ -399,7 +459,7 @@ export default function BranchChatView() {
                       <img src={m.image_url} alt="attachment" className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
                         onClick={() => window.open(m.image_url, '_blank')} />
                     )}
-                    {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
+                    {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{renderComment(m.comment)}</p>}
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>{formatDate(m.created_at)}</div>
                     <div className={cn("mt-1", mine ? "text-right" : "text-left",
                       (m.like_count ?? 0) === 0 && "sm:hidden sm:group-hover:block")}>
@@ -425,6 +485,7 @@ export default function BranchChatView() {
                 <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
               </div>
             )}
+            {MentionBox}
             <div className="flex items-center gap-2">
               <label className="shrink-0 p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand cursor-pointer transition">
                 <Paperclip size={18} />
@@ -456,6 +517,7 @@ export default function BranchChatView() {
         </div>
       ) : (
         <>
+          {SearchBar}
           <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
@@ -484,7 +546,8 @@ export default function BranchChatView() {
                     className={cn(
                       "max-w-[78%] rounded-2xl p-3 shadow-sm",
                       mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
-                      flashId === m.id && "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-offset-zinc-900"
+                      flashId === m.id && "ring-2 ring-brand ring-offset-2 ring-offset-white dark:ring-offset-zinc-900",
+                      searchLc && (m.comment || '').toLowerCase().includes(searchLc) && "ring-2 ring-amber-400"
                     )}>
                     <div className={cn("text-[10px] font-black uppercase tracking-widest mb-1 opacity-70")}>
                       {m.username} · {roleLabel(m.sender_role, lang)}
@@ -517,7 +580,7 @@ export default function BranchChatView() {
                         onLoad={scrollToBottom}
                       />
                     )}
-                    {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{m.comment}</p>}
+                    {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{renderComment(m.comment)}</p>}
 
                     {m.sender_role === 'Restaurants' && (() => {
                       const onMine = mine; // restaurant viewing own (green) bubble
@@ -607,6 +670,7 @@ export default function BranchChatView() {
                 </button>
               </div>
             )}
+            {MentionBox}
             <div className="flex items-center gap-2">
               <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'الكاميرا' : 'Camera'}>
                 <Camera size={20} />

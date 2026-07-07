@@ -7172,6 +7172,17 @@ async function startServer() {
   // the busy alarms. The in-app unread badge still updates on every message.
   const lastChatPushAt = new Map<number, number>();
 
+  // Lightweight user list for @mention autocomplete in chat (any chat participant).
+  app.get("/api/chat-users", authenticate, authorize(CHAT_ROLES), async (_req, res) => {
+    const users = await db.all(`
+      SELECT u.id, u.username, r.name AS role_name
+      FROM users u LEFT JOIN roles r ON u.role_id = r.id
+      WHERE u.is_active = 1
+      ORDER BY u.username
+    `);
+    res.json(users);
+  });
+
   app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
     const user = (req as any).user;
     const fromRestaurant = user.role_name === 'Restaurants';
