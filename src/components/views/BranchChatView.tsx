@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3, Users } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3, Users, UserPlus } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -102,6 +102,10 @@ export default function BranchChatView() {
   const [groupName, setGroupName] = useState('');
   const [allUsers, setAllUsers] = useState<any[]>([]);
   const [memberIds, setMemberIds] = useState<number[]>([]);
+  // Manage-members modal (add/remove users on an existing group).
+  const [showManageMembers, setShowManageMembers] = useState(false);
+  const [manageIds, setManageIds] = useState<number[]>([]);
+  const [savingMembers, setSavingMembers] = useState(false);
   const [userSearch, setUserSearch] = useState('');
   const [creatingGroup, setCreatingGroup] = useState(false);
   const [chatUsers, setChatUsers] = useState<any[]>([]);
@@ -380,6 +384,31 @@ export default function BranchChatView() {
     } catch { /* ignore */ } finally { setCreatingGroup(false); }
   };
 
+  // Open the manage-members modal for the active group: load its current
+  // members (pre-checked) and the full user list to pick from.
+  const openManageMembers = async () => {
+    if (!groupId) return;
+    fetchAllUsers();
+    try {
+      const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/members`);
+      if (res.ok) { const rows = await res.json(); setManageIds(rows.map((r: any) => Number(r.id))); }
+    } catch { /* ignore */ }
+    setUserSearch(''); setShowManageMembers(true);
+  };
+
+  // Save the edited membership; the server reconciles to exactly manageIds.
+  const saveMembers = async () => {
+    if (!groupId || savingMembers) return;
+    setSavingMembers(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/members`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ member_ids: manageIds }),
+      });
+      if (res.ok) { setShowManageMembers(false); setUserSearch(''); await fetchGroups(); }
+    } catch { /* ignore */ } finally { setSavingMembers(false); }
+  };
+
   const sendGroup = async () => {
     if (!groupId || (!comment.trim() && !image) || sending) return;
     setSending(true);
@@ -491,10 +520,17 @@ export default function BranchChatView() {
         <>
           <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Users size={18} /></div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="font-black text-zinc-900 dark:text-white truncate">{activeGroup?.name || (lang === 'ar' ? 'جروب' : 'Group')}</p>
               <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'محادثة جماعية' : 'Group chat'}</p>
             </div>
+            {isGroupAdmin && (
+              <button onClick={openManageMembers} title={lang === 'ar' ? 'إدارة الأعضاء' : 'Manage members'}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 hover:text-brand hover:bg-brand/10 transition text-xs font-black uppercase tracking-widest">
+                <UserPlus size={16} />
+                <span className="hidden sm:inline">{lang === 'ar' ? 'أعضاء' : 'Members'}</span>
+              </button>
+            )}
           </div>
           {SearchBar}
           <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
@@ -1034,6 +1070,59 @@ export default function BranchChatView() {
             <button onClick={createGroup} disabled={!groupName.trim() || creatingGroup}
               className="w-full px-4 py-3 rounded-xl bg-brand text-white text-sm font-black uppercase tracking-widest hover:opacity-90 disabled:opacity-50 transition-all">
               {creatingGroup ? (lang === 'ar' ? 'جارٍ الإنشاء...' : 'Creating...') : (lang === 'ar' ? 'إنشاء الجروب' : 'Create Group')}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Manage-members (admin): add or remove users on an existing group */}
+      {showManageMembers && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-zinc-900/70 backdrop-blur-sm" onClick={() => setShowManageMembers(false)} />
+          <div className="relative bg-white dark:bg-zinc-900 rounded-3xl w-full max-w-md border border-zinc-200 dark:border-zinc-800 shadow-2xl p-6 space-y-4">
+            <div className="flex items-center justify-between">
+              <div className="min-w-0">
+                <h3 className="text-xl font-black text-zinc-900 dark:text-white truncate">{lang === 'ar' ? 'إدارة الأعضاء' : 'Manage Members'}</h3>
+                <p className="text-xs font-bold text-zinc-400 truncate">{activeGroup?.name}</p>
+              </div>
+              <button onClick={() => setShowManageMembers(false)} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-xl shrink-0"><X size={20} /></button>
+            </div>
+            <div className="relative">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
+              <input value={userSearch} onChange={(e) => setUserSearch(e.target.value)}
+                placeholder={lang === 'ar' ? 'بحث عن مستخدم...' : 'Search user...'}
+                className="w-full pl-9 pr-3 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+            </div>
+            <p className="text-[11px] font-black uppercase tracking-widest text-zinc-400">
+              {lang === 'ar' ? 'الأعضاء' : 'Members'}{manageIds.length > 0 ? ` · ${manageIds.length}` : ''}
+            </p>
+            <div className="max-h-64 overflow-y-auto space-y-1 -mx-1 px-1">
+              {groupUserList.length === 0 && (
+                <p className="px-3 py-6 text-center text-zinc-400 text-xs font-bold">{lang === 'ar' ? 'لا يوجد مستخدمون' : 'No users'}</p>
+              )}
+              {groupUserList.map((u: any) => {
+                const checked = manageIds.includes(u.id);
+                const isMe = u.id === user?.id;
+                return (
+                  <button key={u.id} disabled={isMe}
+                    onClick={() => setManageIds((prev) => checked ? prev.filter((x) => x !== u.id) : [...prev, u.id])}
+                    className={cn("w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center justify-between gap-2",
+                      checked ? "bg-brand/10" : "hover:bg-zinc-50 dark:hover:bg-zinc-800", isMe && "opacity-60 cursor-default")}>
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-zinc-900 dark:text-white truncate">{u.username}{isMe ? (lang === 'ar' ? ' (أنت)' : ' (You)') : ''}</p>
+                      <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-tight truncate">{u.role_name}</p>
+                    </div>
+                    <div className={cn("w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0",
+                      checked || isMe ? "bg-brand border-brand" : "border-zinc-300 dark:border-zinc-600")}>
+                      {(checked || isMe) && <Check size={12} className="text-white" strokeWidth={4} />}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+            <button onClick={saveMembers} disabled={savingMembers}
+              className="w-full px-4 py-3 rounded-xl bg-brand text-white text-sm font-black uppercase tracking-widest hover:opacity-90 disabled:opacity-50 transition-all">
+              {savingMembers ? (lang === 'ar' ? 'جارٍ الحفظ...' : 'Saving...') : (lang === 'ar' ? 'حفظ' : 'Save')}
             </button>
           </div>
         </div>

@@ -7633,6 +7633,52 @@ async function startServer() {
     }
   });
 
+  // List a group's members (any member, or an admin).
+  app.get("/api/chat-groups/:id/members", authenticate, async (req, res) => {
+    const userId = (req as any).user.id;
+    const groupId = Number(req.params.id);
+    const isAdmin = GROUP_ADMIN_ROLES.includes((req as any).user.role_name);
+    const member = await db.get(`SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2`, [groupId, userId]);
+    if (!member && !isAdmin) return res.status(403).json({ error: "Not a member of this group" });
+    const rows = await db.all(`
+      SELECT u.id, u.username, r.name AS role_name
+      FROM chat_group_members m
+      JOIN users u ON u.id = m.user_id
+      LEFT JOIN roles r ON r.id = u.role_id
+      WHERE m.group_id = $1
+      ORDER BY u.username
+    `, [groupId]);
+    res.json(rows);
+  });
+
+  // Update a group's membership (admin only): reconcile to exactly member_ids.
+  // The acting admin is always kept a member to avoid locking themselves out.
+  app.put("/api/chat-groups/:id/members", authenticate, authorize(GROUP_ADMIN_ROLES), async (req, res) => {
+    const actorId = (req as any).user.id;
+    const groupId = Number(req.params.id);
+    const group = await db.get(`SELECT id FROM chat_groups WHERE id = $1`, [groupId]);
+    if (!group) return res.status(404).json({ error: "Group not found" });
+    const raw = Array.isArray(req.body.member_ids) ? req.body.member_ids : [];
+    const memberIds: number[] = Array.from(new Set(raw.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0)));
+    if (!memberIds.includes(actorId)) memberIds.push(actorId);
+    try {
+      await db.transaction(async (client) => {
+        // Remove anyone no longer selected...
+        const placeholders = memberIds.map((_, i) => `$${i + 2}`).join(',');
+        await client.query(`DELETE FROM chat_group_members WHERE group_id = $1 AND user_id NOT IN (${placeholders})`, [groupId, ...memberIds]);
+        // ...and add the newly selected (existing rows are a no-op).
+        for (const uid of memberIds) {
+          await client.query(`INSERT INTO chat_group_members (group_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [groupId, uid]);
+        }
+      });
+      broadcast({ type: "GROUP_UPDATED", group_id: groupId });
+      res.json({ success: true, count: memberIds.length });
+    } catch (e) {
+      console.error("update group members failed", e);
+      res.status(500).json({ error: "Failed to update members" });
+    }
+  });
+
   // Groups the current user is a member of, with a last-message preview.
   app.get("/api/chat-groups", authenticate, async (req, res) => {
     const userId = (req as any).user.id;
