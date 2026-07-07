@@ -385,7 +385,7 @@ export default function BranchChatView() {
     if (!text) return null;
     return text.split(/(@\w+)/g).map((part, i) =>
       part[0] === '@' && usernameSet.has(part.slice(1).toLowerCase())
-        ? <span key={i} className="font-black text-brand bg-brand/10 rounded px-0.5">{part}</span>
+        ? <span key={i} className="font-black text-blue-600 dark:text-blue-400 bg-blue-500/10 rounded px-0.5">{part}</span>
         : <React.Fragment key={i}>{part}</React.Fragment>
     );
   };
