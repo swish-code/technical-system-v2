@@ -942,6 +942,13 @@ try {
   // Column already exists
 }
 
+// Migration: Add reply_to_id to group_messages (group chat replies)
+try {
+  await db.exec("ALTER TABLE group_messages ADD COLUMN reply_to_id INTEGER");
+} catch (e) {
+  // Column already exists
+}
+
   // Migration: Add total_duration_minutes to busy_period_records if it doesn't exist
   try {
     await db.exec("ALTER TABLE busy_period_records ADD COLUMN total_duration_minutes INTEGER DEFAULT 0");
@@ -7637,13 +7644,16 @@ async function startServer() {
     if (!member) return res.status(403).json({ error: "Not a member of this group" });
     const msgs = await db.all(`
       SELECT gm.id, gm.group_id, gm.sender_id, gm.comment, gm.image_url, gm.image_type, gm.created_at,
-        u.username, r.name AS sender_role,
+        u.username, r.name AS sender_role, gm.reply_to_id,
+        ru.username AS reply_username, rm.comment AS reply_comment, (rm.image_url IS NOT NULL) AS reply_has_image,
         (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id)::int AS like_count,
         EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'group' AND mr.message_id = gm.id AND mr.user_id = $2) AS liked_by_me,
         (SELECT string_agg(lu.username, ', ' ORDER BY mr.created_at) FROM message_reactions mr JOIN users lu ON lu.id = mr.user_id WHERE mr.message_type = 'group' AND mr.message_id = gm.id) AS liked_by
       FROM group_messages gm
       JOIN users u ON gm.sender_id = u.id
       LEFT JOIN roles r ON u.role_id = r.id
+      LEFT JOIN group_messages rm ON gm.reply_to_id = rm.id
+      LEFT JOIN users ru ON rm.sender_id = ru.id
       WHERE gm.group_id = $1 ORDER BY gm.created_at ASC
     `, [groupId, userId]);
     res.json(msgs);
@@ -7659,10 +7669,16 @@ async function startServer() {
     const image_url = req.file ? `/uploads/${req.file.filename}` : null;
     const image_type = req.file ? req.file.mimetype : null;
     if (!comment && !image_url) return res.status(400).json({ error: "Message is empty" });
+    // Quoted reply: only honor an id that belongs to this same group.
+    let reply_to_id: number | null = req.body.reply_to_id ? Number(req.body.reply_to_id) : null;
+    if (reply_to_id) {
+      const parent = await db.get(`SELECT id FROM group_messages WHERE id = $1 AND group_id = $2`, [reply_to_id, groupId]);
+      if (!parent) reply_to_id = null;
+    }
     const ins = await db.query(`
-      INSERT INTO group_messages (group_id, sender_id, comment, image_url, image_type)
-      VALUES ($1, $2, $3, $4, $5) RETURNING id
-    `, [groupId, userId, comment, image_url, image_type]);
+      INSERT INTO group_messages (group_id, sender_id, comment, image_url, image_type, reply_to_id)
+      VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+    `, [groupId, userId, comment, image_url, image_type, reply_to_id]);
     res.json({ id: ins.rows[0].id });
     try { broadcast({ type: "GROUP_UPDATED", group_id: Number(groupId) }); } catch (e) { console.error("group broadcast failed", e); }
   });

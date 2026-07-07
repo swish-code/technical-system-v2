@@ -95,6 +95,7 @@ export default function BranchChatView() {
   const [groups, setGroups] = useState<any[]>([]);
   const [groupId, setGroupId] = useState<number | null>(null);
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
+  const [groupReplyTo, setGroupReplyTo] = useState<any | null>(null);
   const [showNewGroup, setShowNewGroup] = useState(false);
   const [groupName, setGroupName] = useState('');
   const [allUsers, setAllUsers] = useState<any[]>([]);
@@ -323,7 +324,7 @@ export default function BranchChatView() {
   // Open a group thread (mutually exclusive with a branch thread).
   const openGroup = (gid: number) => {
     setGroupId(gid); setBranchId(null);
-    setComment(''); setImage(null); setImagePreview(null); setReplyTo(null);
+    setComment(''); setImage(null); setImagePreview(null); setReplyTo(null); setGroupReplyTo(null);
   };
 
   const createGroup = async () => {
@@ -350,8 +351,9 @@ export default function BranchChatView() {
       const fd = new FormData();
       if (comment.trim()) fd.append('comment', comment.trim());
       if (image) fd.append('image', image);
+      if (groupReplyTo) fd.append('reply_to_id', String(groupReplyTo.id));
       const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/messages`, { method: 'POST', body: fd });
-      if (res.ok) { setComment(''); setImage(null); setImagePreview(null); await fetchGroupMessages(groupId); }
+      if (res.ok) { setComment(''); setImage(null); setImagePreview(null); setGroupReplyTo(null); await fetchGroupMessages(groupId); }
     } catch { /* ignore */ } finally { setSending(false); }
   };
 
@@ -467,14 +469,30 @@ export default function BranchChatView() {
             )}
             {groupMessages.map((m) => {
               const mine = m.sender_id === user?.id;
+              const groupReplyBtn = (
+                <button onClick={() => setGroupReplyTo(m)} title={lang === 'ar' ? 'رد' : 'Reply'}
+                  className="shrink-0 self-center p-1.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand hover:bg-brand/10 transition opacity-0 group-hover:opacity-100">
+                  <Reply size={16} />
+                </button>
+              );
               return (
-                <div key={m.id} id={`bchat-msg-${m.id}`} className={cn("group flex", mine ? "justify-end" : "justify-start")}>
+                <div key={m.id} id={`bchat-msg-${m.id}`} className={cn("group flex items-center gap-1", mine ? "justify-end" : "justify-start")}>
+                  {mine && groupReplyBtn}
                   <div className={cn("max-w-[78%] rounded-2xl p-3 shadow-sm",
                     mine ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white",
                     searchLc && (m.comment || '').toLowerCase().includes(searchLc) && "ring-2 ring-amber-400")}>
                     <div className="text-[10px] font-black uppercase tracking-widest mb-1 opacity-70">
                       {m.username} · {roleLabel(m.sender_role, lang)}
                     </div>
+                    {m.reply_to_id && (
+                      <div className={cn("mb-1.5 rounded-lg overflow-hidden flex gap-2", mine ? "bg-white/15" : "bg-black/5 dark:bg-white/10")}>
+                        <div className={cn("w-1 shrink-0", mine ? "bg-white/70" : "bg-brand")} />
+                        <div className="min-w-0 py-1 pr-2">
+                          <div className={cn("text-[10px] font-black truncate", mine ? "text-white/90" : "text-brand")}>{m.reply_username || (lang === 'ar' ? 'رسالة' : 'message')}</div>
+                          <div className={cn("text-[11px] truncate", mine ? "text-white/80" : "text-zinc-500 dark:text-zinc-400")}>{m.reply_comment || (m.reply_has_image ? (lang === 'ar' ? '📷 صورة' : '📷 Photo') : '')}</div>
+                        </div>
+                      </div>
+                    )}
                     {m.image_url && (
                       <img src={m.image_url} alt="attachment" className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
                         onClick={() => window.open(m.image_url, '_blank')} />
@@ -493,12 +511,29 @@ export default function BranchChatView() {
                       </button>
                     </div>
                   </div>
+                  {!mine && groupReplyBtn}
                 </div>
               );
             })}
             <div ref={endRef} />
           </div>
           <div className="border-t border-zinc-100 dark:border-zinc-800 p-3">
+            {groupReplyTo && (
+              <div className="flex items-center gap-2 mb-2 bg-zinc-50 dark:bg-zinc-800/50 rounded-xl overflow-hidden">
+                <div className="w-1 self-stretch bg-brand shrink-0" />
+                <div className="min-w-0 flex-1 py-1.5">
+                  <div className="text-xs font-black text-brand truncate">
+                    {lang === 'ar' ? 'ترد على' : 'Replying to'} {groupReplyTo.username}
+                  </div>
+                  <div className="text-xs text-zinc-500 dark:text-zinc-400 truncate">
+                    {previewText(groupReplyTo.comment, !!groupReplyTo.image_url)}
+                  </div>
+                </div>
+                <button onClick={() => setGroupReplyTo(null)} className="shrink-0 p-2 text-zinc-400 hover:text-red-500" title={lang === 'ar' ? 'إلغاء' : 'Cancel'}>
+                  <X size={16} />
+                </button>
+              </div>
+            )}
             {imagePreview && (
               <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
                 <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
