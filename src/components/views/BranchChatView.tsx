@@ -89,6 +89,7 @@ export default function BranchChatView() {
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [flashId, setFlashId] = useState<number | null>(null);
+  const [msgLoading, setMsgLoading] = useState(false);
 
   // --- Group chat (admin-created, member-scoped) ---
   const isGroupAdmin = user?.role_name === 'Manager';
@@ -110,6 +111,8 @@ export default function BranchChatView() {
   // response for a branch you've already navigated away from.
   const messagesCache = useRef<Map<number, ChatMessage[]>>(new Map());
   const currentBranchRef = useRef<number | null>(null);
+  // Branches whose cache is currently being warmed, so prefetch never double-fires.
+  const prefetchInFlight = useRef<Set<number>>(new Set());
 
   // Jump to (and briefly flash) the original message a quote points at.
   const jumpTo = (id: number) => {
@@ -182,15 +185,47 @@ export default function BranchChatView() {
     } catch (e) { /* ignore */ }
   };
 
+  // Warm the message cache for the most-recent threads in the background so that
+  // opening any of them is instant (no network wait). Uses peek mode so it never
+  // marks anything read. Skips threads already cached or currently in flight, and
+  // runs with small concurrency so it doesn't flood the server on load.
+  const prefetchThreads = async (list: Thread[]) => {
+    if (isRestaurant) return;
+    const targets = list
+      .map((t) => t.branch_id)
+      .filter((bid) => !messagesCache.current.has(bid) && !prefetchInFlight.current.has(bid))
+      .slice(0, 15);
+    if (!targets.length) return;
+    let idx = 0;
+    const worker = async () => {
+      while (idx < targets.length) {
+        const bid = targets[idx++];
+        prefetchInFlight.current.add(bid);
+        try {
+          const res = await fetchWithAuth(`${API_URL}/branch-chat?branch_id=${bid}&peek=1`);
+          if (res.ok && !messagesCache.current.has(bid)) messagesCache.current.set(bid, await res.json());
+        } catch (e) { /* ignore */ }
+        finally { prefetchInFlight.current.delete(bid); }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+  };
+
   useEffect(() => { fetchThreads(); fetchBranches(); }, []);
+  // Once the thread list is known, warm each thread's message cache in the
+  // background so the first click on any of them opens instantly.
+  useEffect(() => { if (threads.length) prefetchThreads(threads); }, [threads]);
   useEffect(() => {
     currentBranchRef.current = branchId;
     if (branchId == null) { setMessages([]); return; }
     // Show cached messages instantly so switching feels immediate...
-    setMessages(messagesCache.current.get(branchId) || []);
+    const cached = messagesCache.current.get(branchId);
+    setMessages(cached || []);
+    setMsgLoading(!cached); // only show a loader when there's nothing cached to paint
     // ...then refresh from the server in the background and clear my unread badge.
     (async () => {
       await fetchMessages(branchId);
+      if (currentBranchRef.current === branchId) setMsgLoading(false);
       if (!isRestaurant && currentBranchRef.current === branchId) fetchThreads();
     })();
   }, [branchId]);
@@ -576,9 +611,19 @@ export default function BranchChatView() {
           {SearchBar}
           <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
-              <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
-                {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
-              </p>
+              msgLoading ? (
+                <div className="space-y-4 animate-pulse">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className={cn("flex", i % 2 ? "justify-end" : "justify-start")}>
+                      <div className={cn("h-12 rounded-2xl bg-zinc-100 dark:bg-zinc-800", i % 2 ? "w-40" : "w-52")} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
+                  {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
+                </p>
+              )
             )}
             {messages.map((m) => {
               const mine = m.sender_id === user?.id;

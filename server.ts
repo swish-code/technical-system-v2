@@ -7264,6 +7264,9 @@ async function startServer() {
     const user = (req as any).user;
     const branch_id = user.role_name === 'Restaurants' ? user.branch_id : (req.query.branch_id as string);
     if (!branch_id) return res.json([]);
+    // "peek" is a cache-warming read (prefetch): return messages only, with NO
+    // read-marking, so warming a thread's cache never clears its unread badge.
+    const peek = req.query.peek === '1';
 
     // Office users with a brand restriction can only open their brand's threads.
     if (user.role_name !== 'Restaurants') {
@@ -7298,31 +7301,37 @@ async function startServer() {
       WHERE bm.branch_id = $1 ORDER BY bm.created_at ASC
     `, [branch_id, user.id]);
 
-    // Mark the OTHER side's messages as read for this viewer.
-    const isRestaurant = user.role_name === 'Restaurants';
-    const readResult = await db.query(`
-      UPDATE branch_messages SET read_at = CURRENT_TIMESTAMP
-      WHERE branch_id = $1 AND read_at IS NULL
-        AND sender_role ${isRestaurant ? "<>" : "="} 'Restaurants'
-    `, [branch_id]);
-
-    // Per-user read state: record that THIS user has now seen everything in this
-    // branch up to now. This drives each user's OWN unread badge, independent of
-    // whoever else on the team has or hasn't opened the thread.
-    await db.query(`
-      INSERT INTO branch_reads (user_id, branch_id, last_read_at)
-      VALUES ($1, $2, CURRENT_TIMESTAMP)
-      ON CONFLICT (user_id, branch_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
-    `, [user.id, branch_id]);
-
-    // Only when this read actually flipped rows null->now, tell the other side
-    // live so their "Seen" receipt updates instantly (the guard also prevents
-    // re-read broadcast loops, since a repeat read affects 0 rows).
-    if ((readResult.rowCount ?? 0) > 0) {
-      broadcast({ type: 'BRANCH_CHAT_READ', branch_id: Number(branch_id), by: isRestaurant ? 'restaurant' : 'office' });
-    }
-
+    // Send the conversation to the client immediately, then do the read-marking
+    // writes AFTER responding so the chat paints without waiting on two DB writes.
+    // A "peek" (prefetch) request skips read-marking entirely.
     res.json(msgs);
+    if (peek) return;
+
+    const isRestaurant = user.role_name === 'Restaurants';
+    try {
+      // Mark the OTHER side's messages as read for this viewer.
+      const readResult = await db.query(`
+        UPDATE branch_messages SET read_at = CURRENT_TIMESTAMP
+        WHERE branch_id = $1 AND read_at IS NULL
+          AND sender_role ${isRestaurant ? "<>" : "="} 'Restaurants'
+      `, [branch_id]);
+
+      // Per-user read state: record that THIS user has now seen everything in this
+      // branch up to now. This drives each user's OWN unread badge, independent of
+      // whoever else on the team has or hasn't opened the thread.
+      await db.query(`
+        INSERT INTO branch_reads (user_id, branch_id, last_read_at)
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, branch_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
+      `, [user.id, branch_id]);
+
+      // Only when this read actually flipped rows null->now, tell the other side
+      // live so their "Seen" receipt updates instantly (the guard also prevents
+      // re-read broadcast loops, since a repeat read affects 0 rows).
+      if ((readResult.rowCount ?? 0) > 0) {
+        broadcast({ type: 'BRANCH_CHAT_READ', branch_id: Number(branch_id), by: isRestaurant ? 'restaurant' : 'office' });
+      }
+    } catch (e) { console.error("branch-chat read-mark failed", e); }
   });
 
   app.get("/api/branch-chat/threads", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
