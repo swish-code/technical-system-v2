@@ -7100,19 +7100,41 @@ async function startServer() {
         }
       }
 
-      const brandKey = "COALESCE(NULLIF(pr.data::jsonb->>'brand_name',''), NULLIF(pr.data::jsonb->>'brand',''), 'Unknown')";
+      // Derive the brand per request: HIDE requests store brand_name/brand in
+      // their payload; UNHIDE requests don't (they carry product ids), so fall
+      // back to the product's brand via resolved_products. Anything still
+      // unresolved (e.g. the product was later deleted) stays 'Unknown'.
+      // Guarded so a non-array resolved_products or non-numeric id can't error.
+      const derivedBrand = `COALESCE(
+        NULLIF(pr.data::jsonb->>'brand_name',''),
+        NULLIF(pr.data::jsonb->>'brand',''),
+        (SELECT b.name
+           FROM jsonb_array_elements(
+             CASE WHEN jsonb_typeof(pr.data::jsonb->'resolved_products')='array'
+                  THEN pr.data::jsonb->'resolved_products' ELSE '[]'::jsonb END
+           ) rp
+           JOIN products p ON p.id = CASE WHEN rp->>'product_id' ~ '^[0-9]+$' THEN (rp->>'product_id')::int END
+           JOIN brands b ON b.id = p.brand_id
+           LIMIT 1),
+        'Unknown'
+      )`;
       const rows = await db.all(`
-        SELECT ${brandKey} AS brand,
+        SELECT brand,
           COUNT(*)::int AS processed,
-          COUNT(*) FILTER (WHERE pr.status='Approved')::int AS approved,
-          COUNT(*) FILTER (WHERE pr.status='Rejected')::int AS rejected,
-          ROUND(AVG(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS avg_resp_min,
-          ROUND(MAX(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS max_resp_min
-        FROM pending_requests pr
-        JOIN users pu ON pr.processed_by = pu.id
-        JOIN roles pr_role ON pu.role_id = pr_role.id
-        WHERE ${conditions.join(' AND ')}
-        GROUP BY ${brandKey}
+          COUNT(*) FILTER (WHERE status='Approved')::int AS approved,
+          COUNT(*) FILTER (WHERE status='Rejected')::int AS rejected,
+          ROUND(AVG(resp_min))::int AS avg_resp_min,
+          ROUND(MAX(resp_min))::int AS max_resp_min
+        FROM (
+          SELECT ${derivedBrand} AS brand,
+            pr.status AS status,
+            EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60 AS resp_min
+          FROM pending_requests pr
+          JOIN users pu ON pr.processed_by = pu.id
+          JOIN roles pr_role ON pu.role_id = pr_role.id
+          WHERE ${conditions.join(' AND ')}
+        ) t
+        GROUP BY brand
         ORDER BY processed DESC
       `, params);
 
