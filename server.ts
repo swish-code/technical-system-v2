@@ -7050,6 +7050,79 @@ async function startServer() {
     res.json(rows);
   });
 
+  // Brand-wise variant of team-performance: same filters (date range + role +
+  // user + brand/branch), but one row per BRAND with metrics summed across all
+  // processors. Read-only; the request's brand comes from the JSON payload.
+  app.get("/api/reports/team-performance-by-brand", authenticate, authorize(["Manager", "Super Visor", "Operation Manager", "Technical Back Office", "Call Center", "Technical Team", "Coding Team", "Marketing Team"]), async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+      let { startDate, endDate, brand_id, branch_id, role, user_id, period } = req.query as any;
+
+      const managerRoles = ["Manager", "Super Visor", "Operation Manager"];
+      if (!managerRoles.includes(reqUser.role_name)) user_id = String(reqUser.id);
+
+      const params: any[] = [];
+      const conditions: string[] = ["pr.status <> 'Pending'", "pr.processed_by IS NOT NULL"];
+
+      const roleName = role && role !== 'all' ? role : 'Technical Back Office';
+      conditions.push(`pr_role.name = $${params.length + 1}`);
+      params.push(roleName);
+
+      if (user_id && user_id !== 'all') {
+        conditions.push(`pr.processed_by = $${params.length + 1}`);
+        params.push(user_id);
+      }
+
+      const procDate = "(pr.updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date";
+      const today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date";
+      if (startDate) { conditions.push(`${procDate} >= $${params.length + 1}`); params.push(startDate); }
+      if (endDate) { conditions.push(`${procDate} <= $${params.length + 1}`); params.push(endDate); }
+      if (!startDate && !endDate) {
+        if (period === 'today') conditions.push(`${procDate} = ${today}`);
+        else if (period === 'week') conditions.push(`${procDate} >= ${today} - INTERVAL '7 days'`);
+        else if (period === 'month') conditions.push(`${procDate} >= ${today} - INTERVAL '30 days'`);
+      }
+
+      if (brand_id) {
+        const brandRow = await db.get("SELECT name FROM brands WHERE id = $1", [brand_id]) as any;
+        if (brandRow?.name) {
+          const i = params.length + 1;
+          params.push(brandRow.name);
+          conditions.push(`(pr.data::jsonb->>'brand_name' = $${i} OR pr.data::jsonb->>'brand' = $${i})`);
+        }
+      }
+      if (branch_id) {
+        const branchRow = await db.get("SELECT name FROM branches WHERE id = $1", [branch_id]) as any;
+        if (branchRow?.name) {
+          const i = params.length + 1;
+          params.push(branchRow.name);
+          conditions.push(`(pr.data::jsonb->>'branch_name' = $${i} OR pr.data::jsonb->>'branch' = $${i})`);
+        }
+      }
+
+      const brandKey = "COALESCE(NULLIF(pr.data::jsonb->>'brand_name',''), NULLIF(pr.data::jsonb->>'brand',''), 'Unknown')";
+      const rows = await db.all(`
+        SELECT ${brandKey} AS brand,
+          COUNT(*)::int AS processed,
+          COUNT(*) FILTER (WHERE pr.status='Approved')::int AS approved,
+          COUNT(*) FILTER (WHERE pr.status='Rejected')::int AS rejected,
+          ROUND(AVG(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS avg_resp_min,
+          ROUND(MAX(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at))/60))::int AS max_resp_min
+        FROM pending_requests pr
+        JOIN users pu ON pr.processed_by = pu.id
+        JOIN roles pr_role ON pu.role_id = pr_role.id
+        WHERE ${conditions.join(' AND ')}
+        GROUP BY ${brandKey}
+        ORDER BY processed DESC
+      `, params);
+
+      res.json(rows);
+    } catch (error) {
+      console.error("Error fetching team-performance-by-brand:", error);
+      res.status(500).json({ error: "Failed to fetch brand performance" });
+    }
+  });
+
   app.get("/api/reports/team-target", authenticate, async (_req, res) => {
     const row = await db.get("SELECT value FROM performance_targets WHERE metric = 'avg_response_min'") as any;
     res.json({ avg_response_min: row?.value != null ? Number(row.value) : null });
@@ -7685,6 +7758,71 @@ async function startServer() {
     }
     const result = Array.from(map.values()).sort((a, b) => (b.replies - a.replies) || (b.dismissals - a.dismissals));
     res.json(result);
+  });
+
+  // Brand-wise variant of chat-performance: same filters (via buildChatFilters),
+  // but one row per BRAND with reply metrics + dismissals summed across all
+  // office staff. Read-only; groups on the message's brand.
+  app.get("/api/reports/chat-performance-by-brand", authenticate, authorize(CHAT_KPI_ROLES), async (req, res) => {
+    try {
+      const reqUser = (req as any).user;
+
+      const tRow = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;
+      const target = tRow?.value != null ? Number(tRow.value) : null;
+
+      // Replies
+      const rf = buildChatFilters(req.query, reqUser, 'bm', 'bm.sender_id', 'bm.created_at');
+      const replyConds = [...rf.conds, `bm.sender_role <> 'Restaurants'`, `rm.sender_role = 'Restaurants'`];
+      const replyParams = [...rf.params];
+      let withinSelect = `, NULL::int AS within_target`;
+      if (target != null) { replyParams.push(target); withinSelect = `, COUNT(*) FILTER (WHERE r.resp_min <= $${replyParams.length})::int AS within_target`; }
+
+      const replyRows = await db.all(`
+        WITH r AS (
+          SELECT b.name AS brand,
+            EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60 AS resp_min
+          FROM branch_messages bm
+          JOIN branch_messages rm ON bm.reply_to_id = rm.id
+          JOIN users u ON bm.sender_id = u.id
+          JOIN roles ro ON u.role_id = ro.id
+          JOIN brands b ON bm.brand_id = b.id
+          WHERE ${replyConds.join(' AND ')}
+        )
+        SELECT r.brand,
+          COUNT(*)::int AS replies,
+          ROUND(AVG(r.resp_min))::int AS avg_reply_min,
+          ROUND(MAX(r.resp_min))::int AS max_reply_min,
+          ROUND(percentile_cont(0.5) WITHIN GROUP (ORDER BY r.resp_min))::int AS median_reply_min
+          ${withinSelect}
+        FROM r GROUP BY r.brand
+      `, replyParams) as any[];
+
+      // Dismissals (handled without replying)
+      const df = buildChatFilters(req.query, reqUser, 'bm', 'bm.resolved_by', 'bm.resolved_at');
+      const dismissConds = [...df.conds, `bm.resolved_at IS NOT NULL`];
+      const dismissRows = await db.all(`
+        SELECT b.name AS brand, COUNT(*)::int AS dismissals
+        FROM branch_messages bm
+        JOIN users u ON bm.resolved_by = u.id
+        JOIN roles ro ON u.role_id = ro.id
+        JOIN brands b ON bm.brand_id = b.id
+        WHERE ${dismissConds.join(' AND ')}
+        GROUP BY b.name
+      `, df.params) as any[];
+
+      const map = new Map<string, any>();
+      for (const r of replyRows) map.set(r.brand, { ...r, dismissals: 0 });
+      for (const d of dismissRows) {
+        const e = map.get(d.brand);
+        if (e) e.dismissals = d.dismissals;
+        else map.set(d.brand, { brand: d.brand, replies: 0, avg_reply_min: null, median_reply_min: null, max_reply_min: null, within_target: null, dismissals: d.dismissals });
+      }
+      const result = Array.from(map.values()).sort((a, b) => (b.replies - a.replies) || (b.dismissals - a.dismissals));
+      res.json(result);
+    } catch (error) {
+      console.error("Error fetching chat-performance-by-brand:", error);
+      res.status(500).json({ error: "Failed to fetch brand chat performance" });
+    }
   });
 
   // Drill-down: every explicit reply (with timestamps + gap) for the filtered scope.

@@ -182,6 +182,9 @@ export default function AnalyticsView() {
   const [activeSubTab, setActiveSubTab] = useState<'general' | 'hide' | 'busy' | 'kpi' | 'team'>('general');
   const [teamReport, setTeamReport] = useState<any[]>([]);
   const [chatPerf, setChatPerf] = useState<any[]>([]);
+  // Brand-wise performance (same metrics as the per-user table, grouped by brand).
+  const [teamByBrand, setTeamByBrand] = useState<any[]>([]);
+  const [chatByBrand, setChatByBrand] = useState<any[]>([]);
   const [respTarget, setRespTarget] = useState<number | null>(null);
   const [targetInput, setTargetInput] = useState('');
   const [chatTarget, setChatTarget] = useState<number | null>(null);
@@ -247,7 +250,7 @@ export default function AnalyticsView() {
     if (filters.user !== 'all') queryParams.append('user_id', filters.user);
 
     try {
-      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes, brandHidesTodayRes] = await Promise.all([
+      const [bRes, hRes, busyRes, rRes, tRes, kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes, brandHidesTodayRes, teamBrandRes, chatBrandRes] = await Promise.all([
         fetchWithAuth(`${API_URL}/reports/brands?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-hides?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/branch-busy?${queryParams.toString()}`),
@@ -259,11 +262,15 @@ export default function AnalyticsView() {
         fetchWithAuth(`${API_URL}/reports/team-target`),
         fetchWithAuth(`${API_URL}/reports/chat-performance?${queryParams.toString()}`),
         fetchWithAuth(`${API_URL}/reports/chat-target`),
-        fetchWithAuth(`${API_URL}/reports/brand-hides-today?${queryParams.toString()}`)
+        fetchWithAuth(`${API_URL}/reports/brand-hides-today?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/team-performance-by-brand?${queryParams.toString()}`),
+        fetchWithAuth(`${API_URL}/reports/chat-performance-by-brand?${queryParams.toString()}`)
       ]);
 
       if (teamRes.ok) setTeamReport(await teamRes.json());
       if (chatRes.ok) { setChatPerf(await chatRes.json()); setExpandedChat(null); }
+      if (teamBrandRes.ok) setTeamByBrand(await teamBrandRes.json());
+      if (chatBrandRes.ok) setChatByBrand(await chatBrandRes.json());
       if (chatTargetRes.ok) {
         const d = await chatTargetRes.json();
         setChatTarget(d?.reply_min ?? null);
@@ -942,6 +949,85 @@ export default function AnalyticsView() {
                           </tr>
                         )}
                       </React.Fragment>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Brand-wise performance — same metrics, one row per brand */}
+          <div className="glass-card p-6 rounded-[2rem] border border-zinc-100 dark:border-zinc-800">
+            <h3 className="text-xl font-display font-black text-zinc-900 dark:text-white tracking-tight">
+              {lang === 'ar' ? 'الأداء حسب البراند' : 'Performance by Brand'}
+            </h3>
+            <p className="text-[10px] md:text-xs text-zinc-500 font-bold uppercase tracking-widest mt-1">
+              {lang === 'ar' ? 'معالجة الطلبات + ردود الشات — لكل براند' : 'Request handling + chat replies — per brand'}
+            </p>
+          </div>
+
+          <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
+            <table className="w-full text-left border-collapse min-w-[1000px]">
+              <thead>
+                <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800">
+                  <th rowSpan={2} className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest align-bottom">{lang === 'ar' ? 'البراند' : 'Brand'}</th>
+                  <th colSpan={5} className="px-4 md:px-6 pt-3 pb-1 text-[10px] font-black text-zinc-400 uppercase tracking-widest border-l border-zinc-100 dark:border-zinc-800">{lang === 'ar' ? 'معالجة الطلبات' : 'Request handling'}</th>
+                  <th colSpan={6} className="px-4 md:px-6 pt-3 pb-1 text-[10px] font-black text-brand uppercase tracking-widest border-l border-zinc-100 dark:border-zinc-800">{lang === 'ar' ? 'ردود الشات' : 'Invoice chat'}</th>
+                </tr>
+                <tr className="bg-zinc-50 dark:bg-zinc-800/50">
+                  {[
+                    lang === 'ar' ? 'معالَجة' : 'Processed', lang === 'ar' ? 'موافقة' : 'Approved', lang === 'ar' ? 'رفض' : 'Rejected', lang === 'ar' ? 'متوسط' : 'Avg', lang === 'ar' ? 'أطول' : 'Max',
+                    lang === 'ar' ? 'ردود' : 'Replies', lang === 'ar' ? 'متوسط' : 'Avg', lang === 'ar' ? 'وسيط' : 'Median', lang === 'ar' ? 'أطول' : 'Max', lang === 'ar' ? 'ضمن الهدف' : 'Within', lang === 'ar' ? 'إزالة' : 'Dismissed',
+                  ].map((h, i) => (
+                    <th key={i} className={cn("px-4 md:px-6 pb-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest", i === 0 || i === 5 ? "border-l border-zinc-100 dark:border-zinc-800" : "")}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+                {(() => {
+                  const map = new Map<string, any>();
+                  teamByBrand.forEach((r) => map.set(r.brand, { ...r }));
+                  chatByBrand.forEach((c) => {
+                    const e = map.get(c.brand) || { brand: c.brand, processed: 0, approved: 0, rejected: 0, avg_resp_min: null, max_resp_min: null };
+                    Object.assign(e, { replies: c.replies, avg_reply_min: c.avg_reply_min, median_reply_min: c.median_reply_min, max_reply_min: c.max_reply_min, within_target: c.within_target, dismissals: c.dismissals });
+                    map.set(c.brand, e);
+                  });
+                  const merged = Array.from(map.values()).sort((a, b) => (b.processed || 0) - (a.processed || 0) || (b.replies || 0) - (a.replies || 0));
+                  if (merged.length === 0) {
+                    return <tr><td colSpan={12} className="px-8 py-12 text-center text-zinc-400 font-bold uppercase tracking-widest text-xs">{lang === 'ar' ? 'لا توجد بيانات للفلتر المحدد' : 'No data for the selected filters'}</td></tr>;
+                  }
+                  return merged.map((row, i) => {
+                    const overResp = respTarget != null && row.avg_resp_min != null && row.avg_resp_min > respTarget;
+                    const overReply = chatTarget != null && row.avg_reply_min != null && row.avg_reply_min > chatTarget;
+                    const withinPct = (row.within_target != null && row.replies > 0) ? Math.round((row.within_target / row.replies) * 100) : null;
+                    return (
+                      <tr key={i} className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/30">
+                        <td className="px-4 md:px-6 py-5 font-black text-zinc-900 dark:text-white whitespace-nowrap">{row.brand}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums border-l border-zinc-50 dark:border-zinc-800/50">{row.processed ?? 0}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-emerald-600 tabular-nums">{row.approved ?? 0}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-red-500 tabular-nums">{row.rejected ?? 0}</td>
+                        <td className="px-4 md:px-6 py-5">
+                          <span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
+                            row.avg_resp_min == null ? "text-zinc-400" : respTarget == null ? "text-zinc-900 dark:text-white" : overResp ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                            {row.avg_resp_min ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_resp_min ?? '—'}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums border-l border-zinc-50 dark:border-zinc-800/50">{row.replies ?? 0}</td>
+                        <td className="px-4 md:px-6 py-5">
+                          <span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums",
+                            row.avg_reply_min == null ? "text-zinc-400" : chatTarget == null ? "text-zinc-900 dark:text-white" : overReply ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                            {row.avg_reply_min ?? '—'}
+                          </span>
+                        </td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.median_reply_min ?? '—'}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold text-zinc-700 dark:text-zinc-300 tabular-nums">{row.max_reply_min ?? '—'}</td>
+                        <td className="px-4 md:px-6 py-5 font-bold tabular-nums">
+                          {withinPct == null ? <span className="text-zinc-400">—</span>
+                            : <span className={withinPct >= 80 ? "text-emerald-600" : withinPct >= 50 ? "text-amber-600" : "text-red-500"}>{withinPct}%</span>}
+                        </td>
+                        <td className="px-4 md:px-6 py-5 tabular-nums font-bold text-zinc-600 dark:text-zinc-300">{row.dismissals || 0}</td>
+                      </tr>
                     );
                   });
                 })()}
