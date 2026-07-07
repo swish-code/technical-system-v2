@@ -19,12 +19,16 @@ interface GroupedLog {
   updateLogs: AuditLog[];
   durationMinutes: number | null;
   username: string;
+  notCurrentlyHidden?: boolean;
 }
 
 export default function HistoryView() {
   const { user, lang } = useAuth();
   const { fetchWithAuth } = useFetch();
   const [allLogs, setAllLogs] = useState<AuditLog[]>([]);
+  // Currently-hidden (product_id-branch_id) keys — the source of truth for whether
+  // an open session is really still hidden or was unhidden without a paired log.
+  const [hiddenKeys, setHiddenKeys] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
 
@@ -277,7 +281,20 @@ export default function HistoryView() {
 
   const filteredLogs = useMemo(() => {
     const grouped = groupLogs(allLogs);
-    
+    // An open session (no unhide log) is only truly "still hidden" if the item is
+    // in hidden_items now. Otherwise it was unhidden without a paired log — flag it
+    // so the UI shows "Unhidden" instead of "Still Hidden".
+    grouped.forEach(session => {
+      if (!session.unhideLog) {
+        const hd = JSON.parse(session.hideLog?.new_value || session.hideLog?.old_value || '{}');
+        const pid = session.hideLog?.target_id;
+        const bid = hd.branch_id;
+        // Guard on a loaded set (size>0) so a failed/pending fetch can't wrongly
+        // flag every open session as unhidden.
+        session.notCurrentlyHidden = (hiddenKeys.size > 0 && pid != null && bid != null) ? !hiddenKeys.has(`${pid}-${bid}`) : false;
+      }
+    });
+
     return grouped.filter(session => {
       // Parse data from either hide or unhide log to get brand/branch info
       const data = JSON.parse(session.hideLog?.new_value || session.unhideLog?.new_value || session.hideLog?.old_value || session.unhideLog?.old_value || '{}');
@@ -332,7 +349,7 @@ export default function HistoryView() {
       
       return true;
     });
-  }, [allLogs, startDate, endDate, selectedBrand, selectedBranch, brands, branches]);
+  }, [allLogs, hiddenKeys, startDate, endDate, selectedBrand, selectedBranch, brands, branches]);
 
   const stats = useMemo(() => {
     let totalMinutes = 0;
@@ -395,6 +412,15 @@ export default function HistoryView() {
         );
         setAllLogs(filtered);
       }
+      // Also load the currently-hidden set (source of truth) so an item unhidden
+      // without a paired log isn't shown as "still hidden" forever.
+      try {
+        const hres = await fetchWithAuth(`${API_URL}/hidden-items`);
+        if (hres.ok) {
+          const items: any[] = await hres.json();
+          setHiddenKeys(new Set(items.map((it) => `${it.product_id}-${it.branch_id}`)));
+        }
+      } catch { /* ignore */ }
     } catch (err: any) {
       if (err.isAuthError) return;
       console.error("Failed to fetch audit logs", err);
@@ -824,6 +850,10 @@ export default function HistoryView() {
                             {formatDate(log.unhideLog.timestamp)}
                           </span>
                         </div>
+                      ) : log.notCurrentlyHidden ? (
+                        <span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
+                          UNHIDDEN
+                        </span>
                       ) : (
                         <span className="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400">
                           STILL HIDDEN
