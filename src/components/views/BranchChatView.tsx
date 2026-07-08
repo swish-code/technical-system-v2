@@ -948,7 +948,7 @@ export default function BranchChatView() {
       ) : (
         <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
           {/* Threads list */}
-          <div className={cn("shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 overflow-y-auto space-y-2 flex-1 min-h-0 lg:flex-none lg:w-80 lg:h-full lg:block", hasOpenThread && "hidden")}>
+          <div className={cn("lg:w-80 lg:shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 lg:h-full overflow-y-auto space-y-2 max-lg:flex-1 max-lg:min-h-0", hasOpenThread && "max-lg:hidden")}>
             <button onClick={() => setShowNew(true)}
               className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-brand text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
               <Plus size={16} />
@@ -1034,7 +1034,7 @@ export default function BranchChatView() {
               );
             })}
           </div>
-          <div className={cn("flex-1 min-h-0 flex-col", hasOpenThread ? "flex" : "hidden lg:flex")}>
+          <div className={cn("flex-1 min-h-0 flex flex-col", !hasOpenThread && "max-lg:hidden")}>
             {groupId ? GroupPane : ChatPane}
           </div>
         </div>
