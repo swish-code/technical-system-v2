@@ -249,6 +249,10 @@ const ALLOWED_UPLOAD_MIMES: Record<string, string> = {
   "image/webp": ".webp",
   "image/gif": ".gif",
   "application/pdf": ".pdf",
+  "video/mp4": ".mp4",
+  "video/webm": ".webm",
+  "video/quicktime": ".mov",
+  "video/3gpp": ".3gp",
 };
 
 const storage = multer.diskStorage({
@@ -266,7 +270,7 @@ const storage = multer.diskStorage({
 const upload = multer({
   storage,
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB — was 50MB; nothing here needs that much.
+    fileSize: 50 * 1024 * 1024, // 50MB — raised from 10MB to allow short video clips in chat.
     files: 6,
   },
   fileFilter: (_req, file, cb) => {

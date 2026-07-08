@@ -279,7 +279,18 @@ export default function BranchChatView() {
 
   const pickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) { setImage(f); const r = new FileReader(); r.onloadend = () => setImagePreview(r.result as string); r.readAsDataURL(f); }
+    if (f) {
+      // Server caps uploads at 50MB (images + short video clips). Guard here too
+      // so an oversized pick fails fast with a clear message instead of a 500.
+      if (f.size > 50 * 1024 * 1024) {
+        alert(lang === 'ar' ? 'الملف كبير جدًا — الحد الأقصى 50 ميجابايت' : 'File too large — max 50MB');
+        e.target.value = ''; return;
+      }
+      setImage(f);
+      const r = new FileReader();
+      r.onloadend = () => setImagePreview(r.result as string);
+      r.readAsDataURL(f);
+    }
     e.target.value = '';
   };
 
@@ -566,8 +577,12 @@ export default function BranchChatView() {
                       </div>
                     )}
                     {m.image_url && (
-                      <img src={m.image_url} alt="attachment" className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
-                        onClick={() => window.open(m.image_url, '_blank')} />
+                      (m.image_type || '').startsWith('video/') ? (
+                        <video src={m.image_url} controls preload="metadata" className="rounded-xl max-w-full max-h-72 mb-1.5 bg-black" />
+                      ) : (
+                        <img src={m.image_url} alt="attachment" className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
+                          onClick={() => window.open(m.image_url, '_blank')} />
+                      )
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{renderComment(m.comment)}</p>}
                     <div className={cn("text-[9px] font-bold mt-1 opacity-60", mine ? "text-right" : "text-left")}>{formatDate(m.created_at)}</div>
@@ -608,15 +623,17 @@ export default function BranchChatView() {
             )}
             {imagePreview && (
               <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
-                <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
+                {(image?.type || '').startsWith('video/')
+                  ? <video src={imagePreview} muted className="w-full h-full object-cover bg-black" />
+                  : <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />}
                 <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
               </div>
             )}
             {MentionBox}
             <div className="flex items-center gap-2">
-              <label className="shrink-0 p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand cursor-pointer transition">
+              <label className="shrink-0 p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand cursor-pointer transition" title={lang === 'ar' ? 'صورة أو فيديو' : 'Image or video'}>
                 <Paperclip size={18} />
-                <input type="file" accept="image/*" className="hidden" onChange={pickFile} />
+                <input type="file" accept="image/*,video/*" className="hidden" onChange={pickFile} />
               </label>
               <input
                 value={comment}
@@ -710,13 +727,23 @@ export default function BranchChatView() {
                     )}
 
                     {m.image_url && (
-                      <img
-                        src={m.image_url}
-                        alt="invoice"
-                        className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
-                        onClick={() => window.open(m.image_url!, '_blank')}
-                        onLoad={scrollToBottom}
-                      />
+                      (m.image_type || '').startsWith('video/') ? (
+                        <video
+                          src={m.image_url}
+                          controls
+                          preload="metadata"
+                          className="rounded-xl max-w-full max-h-72 mb-1.5 bg-black"
+                          onLoadedMetadata={scrollToBottom}
+                        />
+                      ) : (
+                        <img
+                          src={m.image_url}
+                          alt="invoice"
+                          className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
+                          onClick={() => window.open(m.image_url!, '_blank')}
+                          onLoad={scrollToBottom}
+                        />
+                      )
                     )}
                     {m.comment && <p className="text-sm font-medium whitespace-pre-wrap break-words">{renderComment(m.comment)}</p>}
 
@@ -802,7 +829,9 @@ export default function BranchChatView() {
             )}
             {imagePreview && (
               <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
-                <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />
+                {(image?.type || '').startsWith('video/')
+                  ? <video src={imagePreview} muted className="w-full h-full object-cover bg-black" />
+                  : <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />}
                 <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full">
                   <X size={12} />
                 </button>
@@ -814,9 +843,9 @@ export default function BranchChatView() {
                 <Camera size={20} />
                 <input type="file" accept="image/*" capture="environment" className="hidden" onChange={pickFile} />
               </label>
-              <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة' : 'Attach image'}>
+              <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة أو فيديو' : 'Attach image or video'}>
                 <Paperclip size={20} />
-                <input type="file" accept="image/*" className="hidden" onChange={pickFile} />
+                <input type="file" accept="image/*,video/*" className="hidden" onChange={pickFile} />
               </label>
               <input
                 type="text"
