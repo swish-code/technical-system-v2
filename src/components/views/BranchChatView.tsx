@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
-import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3, Users, UserPlus } from 'lucide-react';
+import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Reply, CheckCheck, Check, Clock3, Users, UserPlus, ArrowLeft } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -466,6 +466,13 @@ export default function BranchChatView() {
   };
 
   const activeGroup = groups.find((g) => g.id === groupId) || null;
+  // Mobile: show ONE panel at a time (the list OR the open conversation) with a
+  // back button, instead of cramming both into a short stacked layout.
+  const hasOpenThread = branchId != null || groupId != null;
+  const backToList = () => { setBranchId(null); setGroupId(null); };
+  const activeBranchName = threads.find((t) => Number(t.branch_id) === Number(branchId))?.branch_name
+    || allBranches.find((b: any) => Number(b.id) === Number(branchId))?.name
+    || '';
   const groupUserList = allUsers
     .filter((u: any) => {
       const q = userSearch.trim().toLowerCase();
@@ -538,6 +545,10 @@ export default function BranchChatView() {
       ) : (
         <>
           <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center gap-3">
+            <button onClick={backToList} title={lang === 'ar' ? 'رجوع' : 'Back'}
+              className="lg:hidden p-2 -ml-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
+              <ArrowLeft size={20} />
+            </button>
             <div className="w-9 h-9 rounded-xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Users size={18} /></div>
             <div className="min-w-0 flex-1">
               <p className="font-black text-zinc-900 dark:text-white truncate">{activeGroup?.name || (lang === 'ar' ? 'جروب' : 'Group')}</p>
@@ -670,6 +681,15 @@ export default function BranchChatView() {
         </div>
       ) : (
         <>
+          {!isRestaurant && (
+            <div className="lg:hidden flex items-center gap-2 px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
+              <button onClick={backToList} title={lang === 'ar' ? 'رجوع' : 'Back'}
+                className="p-2 -ml-1 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
+                <ArrowLeft size={20} />
+              </button>
+              <p className="font-black text-zinc-900 dark:text-white truncate">{activeBranchName || (lang === 'ar' ? 'محادثة' : 'Chat')}</p>
+            </div>
+          )}
           {SearchBar}
           <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
@@ -910,7 +930,7 @@ export default function BranchChatView() {
               {lang === 'ar' ? 'الشات' : 'Chat'}
             </h2>
           </div>
-          <p className="text-zinc-500 font-medium text-sm">
+          <p className="hidden sm:block text-zinc-500 font-medium text-sm">
             {lang === 'ar' ? 'تبادل صور الفواتير والتعليقات مع التكنيكال' : 'Share invoice photos and comments with the technical team'}
           </p>
         </div>
@@ -928,7 +948,7 @@ export default function BranchChatView() {
       ) : (
         <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
           {/* Threads list */}
-          <div className="lg:w-80 shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 max-h-[40vh] lg:max-h-none lg:h-full overflow-y-auto space-y-2">
+          <div className={cn("shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 overflow-y-auto space-y-2 flex-1 min-h-0 lg:flex-none lg:w-80 lg:h-full lg:block", hasOpenThread && "hidden")}>
             <button onClick={() => setShowNew(true)}
               className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-brand text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
               <Plus size={16} />
@@ -1014,7 +1034,9 @@ export default function BranchChatView() {
               );
             })}
           </div>
-          {groupId ? GroupPane : ChatPane}
+          <div className={cn("flex-1 min-h-0 flex-col", hasOpenThread ? "flex" : "hidden lg:flex")}>
+            {groupId ? GroupPane : ChatPane}
+          </div>
         </div>
       )}
 
