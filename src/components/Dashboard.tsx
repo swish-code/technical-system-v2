@@ -284,8 +284,10 @@ export default function Dashboard() {
     { id: 'users', label: t.users, icon: Users, roles: ["Manager", "Super Visor"] },
   ].filter(item => item.roles.includes(user?.role_name || ''));
 
-  // Restaurants land on Invoice Chat by default; everyone else on their first menu item.
-  const defaultTab = (user?.role_name === 'Restaurants' && menuItems.some(m => m.id === 'branch_chat'))
+  // Restaurants + Call Center (and its Complain Team clone) land on the Chat page
+  // by default; everyone else on their first menu item.
+  const chatFirstRoles = ['Restaurants', 'Call Center', 'Complain Team'];
+  const defaultTab = (chatFirstRoles.includes(user?.role_name || '') && menuItems.some(m => m.id === 'branch_chat'))
     ? 'branch_chat'
     : (menuItems[0]?.id || 'products');
   const [activeTab, setActiveTab] = useState<string>(defaultTab);
