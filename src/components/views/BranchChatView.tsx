@@ -546,7 +546,7 @@ export default function BranchChatView() {
         <>
           <div className="px-6 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center gap-3">
             <button onClick={backToList} title={lang === 'ar' ? 'رجوع' : 'Back'}
-              className="lg:hidden p-2 -ml-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
+              className="md:hidden p-2 -ml-2 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
               <ArrowLeft size={20} />
             </button>
             <div className="w-9 h-9 rounded-xl bg-brand/10 text-brand flex items-center justify-center shrink-0"><Users size={18} /></div>
@@ -682,7 +682,7 @@ export default function BranchChatView() {
       ) : (
         <>
           {!isRestaurant && (
-            <div className="lg:hidden flex items-center gap-2 px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
+            <div className="md:hidden flex items-center gap-2 px-4 py-3 border-b border-zinc-100 dark:border-zinc-800 shrink-0">
               <button onClick={backToList} title={lang === 'ar' ? 'رجوع' : 'Back'}
                 className="p-2 -ml-1 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-600 dark:text-zinc-300 shrink-0">
                 <ArrowLeft size={20} />
@@ -946,9 +946,9 @@ export default function BranchChatView() {
       {isRestaurant ? (
         ChatPane
       ) : (
-        <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
+        <div className="flex flex-col md:flex-row gap-6 flex-1 min-h-0">
           {/* Threads list */}
-          <div className={cn("lg:w-80 lg:shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 lg:h-full overflow-y-auto space-y-2 max-lg:flex-1 max-lg:min-h-0", hasOpenThread && "max-lg:hidden")}>
+          <div className={cn("md:w-80 md:shrink-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 p-3 md:h-full overflow-y-auto space-y-2 max-md:flex-1 max-md:min-h-0", hasOpenThread && "max-md:hidden")}>
             <button onClick={() => setShowNew(true)}
               className="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl bg-brand text-white text-xs font-black uppercase tracking-widest hover:opacity-90 transition-all active:scale-95">
               <Plus size={16} />
@@ -1034,7 +1034,7 @@ export default function BranchChatView() {
               );
             })}
           </div>
-          <div className={cn("flex-1 min-h-0 flex flex-col", !hasOpenThread && "max-lg:hidden")}>
+          <div className={cn("flex-1 min-h-0 flex flex-col", !hasOpenThread && "max-md:hidden")}>
             {groupId ? GroupPane : ChatPane}
           </div>
         </div>
