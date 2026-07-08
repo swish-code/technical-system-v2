@@ -2708,6 +2708,8 @@ async function startServer() {
       const decoded = jwt.verify(token, JWT_SECRET) as any;
       wss.handleUpgrade(req, socket, head, (ws) => {
         (ws as unknown as { user: any }).user = decoded;
+        (ws as any).isAlive = true;
+        ws.on("pong", () => { (ws as any).isAlive = true; });
         wss.emit("connection", ws, req);
       });
     } catch (_err) {
@@ -2715,6 +2717,20 @@ async function startServer() {
       socket.destroy();
     }
   });
+
+  // WS heartbeat: ping every 30s and drop clients that stopped responding.
+  // Keeps connections alive through idle proxy timeouts (which otherwise close
+  // the socket during quiet periods) and reaps zombie/half-dead sockets so a
+  // client never silently stops receiving live chat/notification events.
+  const wsHeartbeat = setInterval(() => {
+    wss.clients.forEach((ws) => {
+      const c = ws as any;
+      if (c.isAlive === false) { try { ws.terminate(); } catch (e) {} return; }
+      c.isAlive = false;
+      try { ws.ping(); } catch (e) {}
+    });
+  }, 30000);
+  wss.on("close", () => clearInterval(wsHeartbeat));
 
   app.use(express.json());
   app.use(cookieParser());

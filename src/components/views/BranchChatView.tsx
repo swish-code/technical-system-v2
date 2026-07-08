@@ -256,6 +256,14 @@ export default function BranchChatView() {
 
   // Live updates
   useEffect(() => {
+    // The socket dropped and came back — re-sync everything so anything sent
+    // during the gap appears immediately, without a manual page refresh.
+    if (lastMessage?.type === 'WS_RECONNECTED') {
+      if (!isRestaurant) { fetchThreads(); fetchGroups(); }
+      if (branchId != null) fetchMessages(branchId);
+      if (groupId != null) fetchGroupMessages(groupId);
+      return;
+    }
     if (lastMessage?.type === 'BRANCH_CHAT_UPDATED') {
       if (!isRestaurant) fetchThreads();
       // A restaurant only has one thread, so always refresh it. Office refreshes
