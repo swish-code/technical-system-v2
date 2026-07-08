@@ -14,6 +14,7 @@ import * as XLSX from "xlsx";
 import * as fs from "fs";
 import webpush from "web-push";
 import multer from "multer";
+import sharp from "sharp";
 
 const { Pool } = pg;
 
@@ -280,6 +281,43 @@ const upload = multer({
     cb(null, true);
   },
 });
+
+// Server-side image shrink. Runs on EVERY upload regardless of the client (web,
+// PWA, or the APK), so raw full-resolution phone photos (2–4MB) don't get
+// stored/served at full size. Downscales the longest edge to 1600px and
+// re-encodes (JPEG q78 for the common camera-photo case), keeping invoice text
+// legible. Best-effort: on any failure, or if it wouldn't be smaller, the
+// original file is left untouched so a message always still sends. Videos, PDFs
+// and GIFs are skipped. Overwrites in place, so filename/mimetype stay valid.
+const IMAGE_MAX_EDGE = 1600;
+async function shrinkImageOnDisk(filePath: string, mimetype: string): Promise<void> {
+  if (!mimetype.startsWith("image/") || mimetype === "image/gif") return;
+  try {
+    const original = fs.statSync(filePath).size;
+    let pipeline = sharp(filePath, { failOn: "none" })
+      .rotate() // bake in EXIF orientation before we strip metadata
+      .resize({ width: IMAGE_MAX_EDGE, height: IMAGE_MAX_EDGE, fit: "inside", withoutEnlargement: true });
+    if (mimetype === "image/png") pipeline = pipeline.png({ compressionLevel: 9, palette: true });
+    else if (mimetype === "image/webp") pipeline = pipeline.webp({ quality: 80 });
+    else pipeline = pipeline.jpeg({ quality: 78, mozjpeg: true });
+
+    const buf = await pipeline.toBuffer();
+    if (buf.length < original) fs.writeFileSync(filePath, buf);
+  } catch (e: any) {
+    console.error("image shrink skipped:", e?.message || e);
+  }
+}
+
+// Post-multer middleware: shrink any uploaded image(s) before the handler runs.
+const shrinkUploads = async (req: any, _res: any, next: any) => {
+  try {
+    const files: any[] = req.file ? [req.file] : (Array.isArray(req.files) ? req.files : []);
+    await Promise.all(files.map((f) => shrinkImageOnDisk(f.path, f.mimetype)));
+  } catch (e) {
+    console.error("shrinkUploads error:", e);
+  }
+  next();
+};
 
 // Seed Data Function
 const ALLOWED_BRANDS = ["SHAKIR", "YELLO PIZZA", "BBT", "PATTIE", "CHILI", "SLICE", "JUST C", "MISHMASH", "TABLE", "FM"];
@@ -3737,7 +3775,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/late-orders", authenticate, authorize(["Call Center", "Restaurants", "Technical Back Office", "Operation Manager"]), upload.array('attachments', 6), async (req, res) => {
+  app.post("/api/late-orders", authenticate, authorize(["Call Center", "Restaurants", "Technical Back Office", "Operation Manager"]), upload.array('attachments', 6), shrinkUploads, async (req, res) => {
     try {
       const { brand_id, branch_id, customer_name, customer_phone, order_id, platform, call_center_message, case_type, technical_type, dedication_time, dynamic_values } = req.body;
       
@@ -7225,7 +7263,7 @@ async function startServer() {
     res.json(users);
   });
 
-  app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), async (req, res) => {
+  app.post("/api/branch-chat", authenticate, authorize(CHAT_ROLES), upload.single('image'), shrinkUploads, async (req, res) => {
     const user = (req as any).user;
     const fromRestaurant = user.role_name === 'Restaurants';
     let branch_id = fromRestaurant ? user.branch_id : req.body.branch_id;
@@ -7750,7 +7788,7 @@ async function startServer() {
   });
 
   // Post a message to a group (members only). Optional image upload.
-  app.post("/api/chat-groups/:id/messages", authenticate, upload.single('image'), async (req, res) => {
+  app.post("/api/chat-groups/:id/messages", authenticate, upload.single('image'), shrinkUploads, async (req, res) => {
     const userId = (req as any).user.id;
     const groupId = req.params.id;
     const member = await db.get(`SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2`, [groupId, userId]);
