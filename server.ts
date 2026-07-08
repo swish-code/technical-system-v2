@@ -40,27 +40,26 @@ if (connectionString) {
     console.log(`[DB] Connection string detected.`);
     console.log(`[DB] Host: ${url.hostname.replace(/./g, (c, i) => i < 3 ? c : '*')}`);
     if (isInternal) {
-      console.error("[DB] WARNING: Still using INTERNAL Railway URL. DNS resolution will fail.");
+      console.log("[DB] Using INTERNAL Railway URL (private network) — recommended: no egress cost.");
     } else {
-      console.log("[DB] SUCCESS: Using PUBLIC connection string. Connection should work.");
+      console.log("[DB] Using PUBLIC proxy — note: DB traffic is billed as EGRESS. Switch to postgres.railway.internal:5432 to cut cost.");
     }
   } catch (e) {
     console.log(`[DB] Invalid connection string format.`);
   }
 }
 
+// Internal Railway networking (postgres.railway.internal) runs over the private
+// network — no SSL, and crucially NOT billed as egress (unlike the public
+// *.proxy.rlwy.net proxy). Prefer the internal host to cut egress cost.
+const isInternalDb = !!connectionString && connectionString.includes('railway.internal');
 const pool = new Pool({
   connectionString: connectionString,
-  ssl: connectionString?.includes('railway') ? { rejectUnauthorized: false } : false
+  ssl: isInternalDb ? false : (connectionString?.includes('railway') ? { rejectUnauthorized: false } : false)
 });
 
-if (process.env.DATABASE_URL?.includes('postgres.railway.internal')) {
-  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-  console.error("CRITICAL CONFIGURATION ERROR: Railway Internal URL Detected");
-  console.error("The hostname 'postgres.railway.internal' only works inside Railway.");
-  console.error("You MUST use the 'Public Connection String' from your Railway dashboard.");
-  console.error("It should look like: postgresql://postgres:PASSWORD@proxy.railway.app:PORT/railway");
-  console.error("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
+if (isInternalDb) {
+  console.log("[DB] Private network in use (postgres.railway.internal) — DB traffic is off billed egress. Good for cost.");
 }
 
 function requireEnv(name: string): string {
@@ -2763,6 +2762,17 @@ async function startServer() {
   (async () => {
     try {
       console.log("Connecting to PostgreSQL...");
+      // On Railway's private network, DNS for *.railway.internal can take a
+      // moment to be ready at cold start. Retry a few times before giving up so
+      // switching DATABASE_URL to the internal host doesn't fail on boot.
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        try { await pool.query("SELECT 1"); break; }
+        catch (e: any) {
+          if (attempt === 10) throw e;
+          console.log(`[DB] Not ready yet (attempt ${attempt}/10: ${e.message}). Retrying in 2s...`);
+          await new Promise((r) => setTimeout(r, 2000));
+        }
+      }
       await initDb();
       
       // Ensure unique constraints exist for ON CONFLICT
