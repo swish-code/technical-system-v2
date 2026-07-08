@@ -536,7 +536,7 @@ export default function BranchChatView() {
   }, [chatSearch]);
 
   const GroupPane = (
-    <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
       {!groupId ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
           <Users size={40} />
@@ -563,7 +563,7 @@ export default function BranchChatView() {
             )}
           </div>
           {SearchBar}
-          <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
             {groupMessages.length === 0 && (
               <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
                 {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
@@ -673,7 +673,7 @@ export default function BranchChatView() {
   );
 
   const ChatPane = (
-    <div className="flex flex-col flex-1 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+    <div className="flex flex-col flex-1 min-w-0 min-h-0 bg-white dark:bg-zinc-900 rounded-[2rem] border border-zinc-200 dark:border-zinc-800 overflow-hidden">
       {!branchId ? (
         <div className="flex-1 flex flex-col items-center justify-center text-zinc-400 gap-3">
           <MessageSquare size={40} />
@@ -691,7 +691,7 @@ export default function BranchChatView() {
             </div>
           )}
           {SearchBar}
-          <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
+          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               msgLoading ? (
                 <div className="space-y-4 animate-pulse">
@@ -1034,7 +1034,7 @@ export default function BranchChatView() {
               );
             })}
           </div>
-          <div className={cn("flex-1 min-h-0 flex flex-col", !hasOpenThread && "max-md:hidden")}>
+          <div className={cn("flex-1 min-w-0 min-h-0 flex flex-col", !hasOpenThread && "max-md:hidden")}>
             {groupId ? GroupPane : ChatPane}
           </div>
         </div>
