@@ -5,6 +5,7 @@ import { Send, Paperclip, X, MessageSquare, Download, Search, Plus, Camera, Repl
 import * as XLSX from 'xlsx';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { compressImage } from '../../lib/imageCompress';
 
 interface ChatMessage {
   id: number;
@@ -285,7 +286,7 @@ export default function BranchChatView() {
   const scrollToBottom = () => endRef.current?.scrollIntoView({ block: 'end' });
   useEffect(() => { scrollToBottom(); }, [messages, branchId]);
 
-  const pickFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     if (f) {
       // Server caps uploads at 50MB (images + short video clips). Guard here too
@@ -294,10 +295,13 @@ export default function BranchChatView() {
         alert(lang === 'ar' ? 'الملف كبير جدًا — الحد الأقصى 50 ميجابايت' : 'File too large — max 50MB');
         e.target.value = ''; return;
       }
-      setImage(f);
+      // Shrink photos in the browser before upload so invoices send fast and
+      // open fast for the office. Non-images (video/pdf) pass through untouched.
+      const picked = await compressImage(f);
+      setImage(picked);
       const r = new FileReader();
       r.onloadend = () => setImagePreview(r.result as string);
-      r.readAsDataURL(f);
+      r.readAsDataURL(picked);
     }
     e.target.value = '';
   };
@@ -311,11 +315,13 @@ export default function BranchChatView() {
       if (item.type.startsWith('image/')) {
         const f = item.getAsFile();
         if (f) {
-          setImage(f);
-          const r = new FileReader();
-          r.onloadend = () => setImagePreview(r.result as string);
-          r.readAsDataURL(f);
           e.preventDefault();
+          compressImage(f).then((picked) => {
+            setImage(picked);
+            const r = new FileReader();
+            r.onloadend = () => setImagePreview(r.result as string);
+            r.readAsDataURL(picked);
+          });
         }
         break;
       }
