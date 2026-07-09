@@ -7360,7 +7360,10 @@ async function startServer() {
              bm.reply_to_id, ru.username AS reply_username, rm.comment AS reply_comment,
              (rm.image_url IS NOT NULL) AS reply_has_image, rm.sender_role AS reply_sender_role,
              bm.resolved_at, bm.resolve_reason, reu.username AS resolved_by_name,
-             (bm.sender_role = 'Restaurants' AND lo.t IS NOT NULL AND bm.created_at < lo.t) AS answered,
+             (bm.sender_role = 'Restaurants' AND (
+                (lo.t IS NOT NULL AND bm.created_at < lo.t)
+                OR EXISTS (SELECT 1 FROM message_reactions lmr WHERE lmr.message_type = 'branch' AND lmr.message_id = bm.id)
+             )) AS answered,
              (SELECT COUNT(*) FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id)::int AS like_count,
              EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id AND mr.user_id = $2) AS liked_by_me,
              (SELECT string_agg(lu.username, ', ' ORDER BY mr.created_at) FROM message_reactions mr JOIN users lu ON lu.id = mr.user_id WHERE mr.message_type = 'branch' AND mr.message_id = bm.id) AS liked_by
@@ -7475,7 +7478,8 @@ async function startServer() {
       LEFT JOIN last_office lf ON lf.branch_id = bm.branch_id
       WHERE bm.sender_role = 'Restaurants'
         AND bm.resolved_at IS NULL
-        AND (lf.t IS NULL OR bm.created_at > lf.t)${brandCond}
+        AND (lf.t IS NULL OR bm.created_at > lf.t)
+        AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id)${brandCond}
       ORDER BY bm.created_at DESC
     `, params);
     res.json(rows);
