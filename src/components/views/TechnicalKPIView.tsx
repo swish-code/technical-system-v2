@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn } from '../../lib/utils';
 import { Gauge, Loader2, Save } from 'lucide-react';
@@ -66,7 +66,7 @@ export default function TechnicalKPIView() {
   const [slaInputs, setSlaInputs] = useState<Record<number, string>>({});
   const [savingSla, setSavingSla] = useState<number | null>(null);
 
-  const fetchData = useCallback(async () => {
+  const fetchData = async () => {
     if (!month) return;
     setLoading(true);
     try {
@@ -85,9 +85,13 @@ export default function TechnicalKPIView() {
     } finally {
       setLoading(false);
     }
-  }, [month, fetchWithAuth]);
+  };
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  // Refetch only when the selected month changes. Depending on fetchData /
+  // fetchWithAuth here would loop forever, since useFetch returns a new
+  // function identity on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { fetchData(); }, [month]);
 
   const saveMonth = async () => {
     setSavingMonth(true);
