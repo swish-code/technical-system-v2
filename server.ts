@@ -15,6 +15,7 @@ import * as fs from "fs";
 import webpush from "web-push";
 import multer from "multer";
 import sharp from "sharp";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 const { Pool } = pg;
 
@@ -308,11 +309,54 @@ async function shrinkImageOnDisk(filePath: string, mimetype: string): Promise<vo
   }
 }
 
-// Post-multer middleware: shrink any uploaded image(s) before the handler runs.
+// --- Cloudflare R2 (S3-compatible) object storage. When configured, uploaded
+// media is pushed to R2 and served from its public URL (free egress + edge
+// caching near users) instead of streaming through this app. Falls back to the
+// local /uploads path when R2 is off or an upload fails, so media always works.
+// Only NEW uploads use R2; existing /uploads URLs keep being served locally.
+const R2_ENABLED = !!(process.env.R2_ACCOUNT_ID && process.env.R2_ACCESS_KEY_ID &&
+  process.env.R2_SECRET_ACCESS_KEY && process.env.R2_BUCKET && process.env.R2_PUBLIC_URL);
+const r2Client = R2_ENABLED ? new S3Client({
+  region: "auto",
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  credentials: {
+    accessKeyId: process.env.R2_ACCESS_KEY_ID as string,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY as string,
+  },
+}) : null;
+if (R2_ENABLED) console.log("[R2] Enabled — new uploads go to bucket:", process.env.R2_BUCKET);
+
+// Returns the public URL a freshly-uploaded (already shrunk) file should be
+// served from. Pushes it to R2 and deletes the local copy on success; on any
+// failure or when R2 is off, returns the local /uploads path so media still works.
+async function publicUrlForUpload(file: any): Promise<string> {
+  const localUrl = `/uploads/${file.filename}`;
+  if (!r2Client) return localUrl;
+  try {
+    const body = await fs.promises.readFile(file.path);
+    await r2Client.send(new PutObjectCommand({
+      Bucket: process.env.R2_BUCKET as string,
+      Key: file.filename,
+      Body: body,
+      ContentType: file.mimetype || "application/octet-stream",
+    }));
+    try { await fs.promises.unlink(file.path); } catch { /* keep the local copy if unlink fails */ }
+    return `${(process.env.R2_PUBLIC_URL as string).replace(/\/+$/, "")}/${file.filename}`;
+  } catch (e: any) {
+    console.error("[R2] upload failed, serving locally:", e?.message || e);
+    return localUrl;
+  }
+}
+
+// Post-multer middleware: shrink any uploaded image(s), then push them to R2 (if
+// configured) and stamp each file with its public URL for the handler to store.
 const shrinkUploads = async (req: any, _res: any, next: any) => {
   try {
     const files: any[] = req.file ? [req.file] : (Array.isArray(req.files) ? req.files : []);
-    await Promise.all(files.map((f) => shrinkImageOnDisk(f.path, f.mimetype)));
+    await Promise.all(files.map(async (f) => {
+      await shrinkImageOnDisk(f.path, f.mimetype);
+      f.publicUrl = await publicUrlForUpload(f);
+    }));
   } catch (e) {
     console.error("shrinkUploads error:", e);
   }
@@ -3782,7 +3826,7 @@ async function startServer() {
       // Support multiple attachments. Keep attachment_url/type = the first file
       // for backward compatibility with existing single-attachment records/code.
       const files = (req.files as Express.Multer.File[]) || [];
-      const attachment_url = files[0] ? `/uploads/${files[0].filename}` : null;
+      const attachment_url = files[0] ? ((files[0] as any).publicUrl || `/uploads/${files[0].filename}`) : null;
       const attachment_type = files[0] ? files[0].mimetype : null;
       
       // Validation for Dedication. Coerce empty string to null so Postgres doesn't
@@ -3830,7 +3874,7 @@ async function startServer() {
       for (const f of files) {
         await db.query(
           "INSERT INTO late_order_attachments (request_id, url, type) VALUES ($1, $2, $3)",
-          [requestId, `/uploads/${f.filename}`, f.mimetype]
+          [requestId, (f as any).publicUrl || `/uploads/${f.filename}`, f.mimetype]
         );
       }
 
@@ -7268,7 +7312,7 @@ async function startServer() {
     const fromRestaurant = user.role_name === 'Restaurants';
     let branch_id = fromRestaurant ? user.branch_id : req.body.branch_id;
     const comment = (req.body.comment || '').trim() || null;
-    const image_url = req.file ? `/uploads/${req.file.filename}` : null;
+    const image_url = req.file ? ((req.file as any).publicUrl || `/uploads/${req.file.filename}`) : null;
     const image_type = req.file ? req.file.mimetype : null;
 
     if (!branch_id) return res.status(400).json({ error: "branch_id required" });
@@ -7798,7 +7842,7 @@ async function startServer() {
     const member = await db.get(`SELECT 1 FROM chat_group_members WHERE group_id = $1 AND user_id = $2`, [groupId, userId]);
     if (!member) return res.status(403).json({ error: "Not a member of this group" });
     const comment = (req.body.comment || '').trim() || null;
-    const image_url = req.file ? `/uploads/${req.file.filename}` : null;
+    const image_url = req.file ? ((req.file as any).publicUrl || `/uploads/${req.file.filename}`) : null;
     const image_type = req.file ? req.file.mimetype : null;
     if (!comment && !image_url) return res.status(400).json({ error: "Message is empty" });
     // Quoted reply: only honor an id that belongs to this same group.
