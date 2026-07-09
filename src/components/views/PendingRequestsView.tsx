@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate, safeJson } from '../../lib/utils';
-import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare, Send } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PendingRequest } from '../../types';
 import * as XLSX from 'xlsx';
@@ -28,9 +28,11 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const [branchFilter, setBranchFilter] = useState<string>('all');
   const [brands, setBrands] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
-  // Invoice-chat tickets (restaurant messages awaiting an office reply). Read-only,
-  // independent from pending_requests.
+  // Invoice-chat tickets (restaurant messages awaiting an office reply).
+  // Independent from pending_requests. Office can reply inline (posts a real chat message).
   const [chatTickets, setChatTickets] = useState<any[]>([]);
+  const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
+  const [sendingReplyId, setSendingReplyId] = useState<number | null>(null);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -95,6 +97,25 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const openChat = (branchId: number) => {
     sessionStorage.setItem('open_chat_branch', String(branchId));
     window.dispatchEvent(new CustomEvent('open-branch-chat', { detail: branchId }));
+  };
+
+  // Reply to a ticket in place. Posts a REAL chat message via the existing
+  // endpoint, so it appears in the full conversation as a reference; the ticket
+  // then auto-clears (an office message now exists after the restaurant message).
+  const sendReply = async (t: any) => {
+    const text = (replyDrafts[t.id] || '').trim();
+    if (!text || sendingReplyId) return;
+    setSendingReplyId(t.id);
+    try {
+      const fd = new FormData();
+      fd.append('branch_id', String(t.branch_id));
+      fd.append('comment', text);
+      const res = await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
+      if (res.ok) {
+        setReplyDrafts((prev) => { const n = { ...prev }; delete n[t.id]; return n; });
+        await fetchTickets();
+      }
+    } catch { /* ignore */ } finally { setSendingReplyId(null); }
   };
 
   useEffect(() => {
@@ -375,35 +396,55 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
           </div>
           <div className="grid grid-cols-1 gap-3">
             {filteredTickets.map((t) => (
-              <div key={t.id} className="bg-white dark:bg-zinc-900 rounded-2xl border border-brand/30 p-4 flex flex-wrap items-center justify-between gap-4">
-                <div className="flex items-center gap-4 min-w-0">
-                  {t.image_url && (
-                    <img src={t.image_url} alt="invoice" className="w-12 h-12 rounded-xl object-cover cursor-zoom-in shrink-0"
-                      onClick={() => window.open(t.image_url, '_blank')} />
-                  )}
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                      <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-brand/10 text-brand border border-brand/20">
-                        {lang === 'en' ? 'Invoice Chat' : 'مراسلة فاتورة'}
-                      </span>
-                      <span className="text-xs font-bold text-zinc-500">{t.brand_name} · {t.branch_name}</span>
-                      <div className="w-1 h-1 rounded-full bg-zinc-300" />
-                      <span className="text-xs font-bold text-zinc-400">{formatDate(t.created_at)}</span>
+              <div key={t.id} className="bg-white dark:bg-zinc-900 rounded-2xl border border-brand/30 p-4 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-4 min-w-0">
+                    {t.image_url && (
+                      <img src={t.image_url} alt="invoice" className="w-12 h-12 rounded-xl object-cover cursor-zoom-in shrink-0"
+                        onClick={() => window.open(t.image_url, '_blank')} />
+                    )}
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                        <span className="text-[10px] font-black uppercase tracking-widest px-2 py-0.5 rounded-md bg-brand/10 text-brand border border-brand/20">
+                          {lang === 'en' ? 'Invoice Chat' : 'مراسلة فاتورة'}
+                        </span>
+                        <span className="text-xs font-bold text-zinc-500">{t.brand_name} · {t.branch_name}</span>
+                        <div className="w-1 h-1 rounded-full bg-zinc-300" />
+                        <span className="text-xs font-bold text-zinc-400">{formatDate(t.created_at)}</span>
+                      </div>
+                      <p className="font-black text-zinc-900 dark:text-white break-words">
+                        {lang === 'en' ? 'From' : 'من'}: {t.username}
+                        {t.comment ? <span className="text-zinc-500 font-medium"> — {t.comment}</span>
+                          : t.image_url ? <span className="text-zinc-400 font-medium"> — 📷</span> : null}
+                      </p>
                     </div>
-                    <p className="font-black text-zinc-900 dark:text-white truncate">
-                      {lang === 'en' ? 'From' : 'من'}: {t.username}
-                      {t.comment ? <span className="text-zinc-500 font-medium"> — {t.comment}</span>
-                        : t.image_url ? <span className="text-zinc-400 font-medium"> — 📷</span> : null}
-                    </p>
+                  </div>
+                  <div className="shrink-0 flex items-center gap-2">
+                    <button
+                      onClick={() => openChat(t.branch_id)}
+                      className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 rounded-xl font-bold text-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all active:scale-95"
+                    >
+                      <MessageSquare size={16} />
+                      {lang === 'en' ? 'Open & Reply' : 'فتح والرد'}
+                    </button>
                   </div>
                 </div>
-                <div className="shrink-0 flex items-center gap-2">
+                {/* Inline reply — sends a real chat message; the ticket clears once answered */}
+                <div className="flex items-center gap-2">
+                  <input
+                    value={replyDrafts[t.id] || ''}
+                    onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(t); } }}
+                    placeholder={lang === 'en' ? 'Type a reply…' : 'اكتب ردًا…'}
+                    className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white"
+                  />
                   <button
-                    onClick={() => openChat(t.branch_id)}
-                    className="flex items-center gap-2 px-4 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all active:scale-95"
+                    onClick={() => sendReply(t)}
+                    disabled={sendingReplyId === t.id || !(replyDrafts[t.id] || '').trim()}
+                    className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-bold text-sm hover:opacity-90 transition-all active:scale-95 disabled:opacity-50"
                   >
-                    <MessageSquare size={16} />
-                    {lang === 'en' ? 'Open & Reply' : 'فتح والرد'}
+                    {sendingReplyId === t.id ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
+                    {lang === 'en' ? 'Send' : 'إرسال'}
                   </button>
                 </div>
               </div>
