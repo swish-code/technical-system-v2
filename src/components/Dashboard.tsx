@@ -43,10 +43,11 @@ import HideItemConfigView from './views/HideItemConfigView';
 import PendingRequestsView from './views/PendingRequestsView';
 import AnalyticsView from './views/AnalyticsView';
 import UserKPIView from './views/UserKPIView';
+import TechnicalKPIView from './views/TechnicalKPIView';
 import LateOrdersView from './views/LateOrdersView';
 import BranchChatView from './views/BranchChatView';
 import OrdersView from './views/OrdersView';
-import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert, MessageSquare } from 'lucide-react';
+import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert, MessageSquare, Gauge } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import NotificationManager from './NotificationManager';
 import { subscribeToPush } from '../lib/notificationHelper';
@@ -233,6 +234,7 @@ export default function Dashboard() {
       brands: "Brands",
       coding: "PLU",
       myKpi: "My KPI",
+      techKpi: "Technical Team KPIs",
       lateOrders: "Call Center Cases",
       branchChat: "Chat",
       callCenterConfig: "Call Center Config",
@@ -256,6 +258,7 @@ export default function Dashboard() {
       brands: "العلامات التجارية",
       coding: "PLU",
       myKpi: "مؤشرات الأداء الخاصة بي",
+      techKpi: "مؤشرات أداء الفريق التقني",
       lateOrders: "حالات مركز الاتصال",
       branchChat: "الشات",
       callCenterConfig: "إعدادات مركز الاتصال",
@@ -280,6 +283,7 @@ export default function Dashboard() {
     { id: 'call_center_config', label: t.callCenterConfig, icon: Settings, roles: ["Manager", "Super Visor", "Operation Manager"] },
     { id: 'logs', label: t.logs, icon: History, roles: ["Manager", "Super Visor", "Operation Manager"] },
     { id: 'analytics', label: t.analytics, icon: BarChart3, roles: ["Manager", "Super Visor", "Area Manager", "Operation Manager"] },
+    { id: 'tech_kpi', label: t.techKpi, icon: Gauge, roles: ["Manager", "Super Visor"] },
     { id: 'user_kpi', label: t.myKpi, icon: Activity, roles: ["Marketing Team", "Technical Team", "Technical Back Office", "Call Center", "Complain Team", "Coding Team", "Super Visor", "Operation Manager"] },
     { id: 'users', label: t.users, icon: Users, roles: ["Manager", "Super Visor"] },
   ].filter(item => item.roles.includes(user?.role_name || ''));
@@ -359,6 +363,9 @@ export default function Dashboard() {
     }
     if (activeTab === 'analytics') {
       return <AnalyticsView />;
+    }
+    if (activeTab === 'tech_kpi') {
+      return <TechnicalKPIView />;
     }
     if (activeTab === 'user_kpi') {
       return <UserKPIView />;

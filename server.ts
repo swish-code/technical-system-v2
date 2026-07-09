@@ -865,6 +865,26 @@ async function initDb() {
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
   );
 
+  -- Technical Team KPIs (admin/supervisor). Month-level values shared across all
+  -- agents: the editable FTR speed target (minutes) and the company Rating (/5).
+  CREATE TABLE IF NOT EXISTS technical_kpi_month (
+    period_month TEXT PRIMARY KEY,          -- 'YYYY-MM'
+    ftr_target_min NUMERIC,
+    rating NUMERIC,                         -- out of 5, same for every agent
+    updated_by INTEGER,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  -- Per-agent, per-month SLA score (0-100), entered manually by admin/supervisor.
+  CREATE TABLE IF NOT EXISTS technical_kpi_sla (
+    period_month TEXT NOT NULL,             -- 'YYYY-MM'
+    user_id INTEGER NOT NULL,
+    sla NUMERIC,                            -- 0-100
+    updated_by INTEGER,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (period_month, user_id)
+  );
+
   CREATE TABLE IF NOT EXISTS branch_messages (
     id SERIAL PRIMARY KEY,
     brand_id INTEGER NOT NULL,
@@ -7286,6 +7306,142 @@ async function startServer() {
       ON CONFLICT (metric) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
     `, [val, (req as any).user.id]);
     res.json({ success: true });
+  });
+
+  // ---- Technical Team KPIs (Manager / Super Visor only) --------------------
+  // Monthly scorecard for Technical Back Office agents. Three KPIs per agent:
+  //   FTR    – auto: pooled speed of tickets + chat replies vs the month target
+  //            score = min(100, target / avg_speed).  "—" when no activity.
+  //   SLA    – manual per-agent %, entered by admin/supervisor.
+  //   Rating – manual, one value /5 for the month, shared by all agents.
+  // All read-only against existing data for FTR; manual values live in their own
+  // tables. `month` is 'YYYY-MM' (calendar month, Kuwait local time).
+  const TECH_KPI_ROLES = ["Manager", "Super Visor"];
+  const monthOr = (m: any): string => {
+    const s = String(m || "");
+    return /^\d{4}-\d{2}$/.test(s) ? s : "";
+  };
+
+  app.get("/api/reports/technical-kpi", authenticate, authorize(TECH_KPI_ROLES), async (req, res) => {
+    try {
+      const month = monthOr(req.query.month);
+      if (!month) return res.status(400).json({ error: "month (YYYY-MM) is required" });
+
+      const monthCfg = await db.get(
+        "SELECT ftr_target_min, rating FROM technical_kpi_month WHERE period_month = $1", [month]
+      ) as any;
+      const ftrTarget = monthCfg?.ftr_target_min != null ? Number(monthCfg.ftr_target_min) : null;
+      const rating = monthCfg?.rating != null ? Number(monthCfg.rating) : null;
+
+      // Per Technical Back Office agent: pooled ticket + chat-reply speed for the
+      // month. Kuwait-local month bucket via to_char on the shifted timestamp.
+      const rows = await db.all(`
+        WITH tbo AS (
+          SELECT u.id, u.username
+          FROM users u JOIN roles r ON u.role_id = r.id
+          WHERE r.name = 'Technical Back Office'
+        ),
+        tk AS (
+          SELECT pr.processed_by AS uid,
+            COUNT(*)::int AS cnt,
+            SUM(EXTRACT(EPOCH FROM (pr.updated_at - pr.created_at)) / 60) AS mins
+          FROM pending_requests pr
+          WHERE pr.status <> 'Pending' AND pr.processed_by IS NOT NULL
+            AND to_char((pr.updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait'), 'YYYY-MM') = $1
+          GROUP BY pr.processed_by
+        ),
+        ch AS (
+          SELECT bm.sender_id AS uid,
+            COUNT(*)::int AS cnt,
+            SUM(EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60) AS mins
+          FROM branch_messages bm
+          JOIN branch_messages rm ON bm.reply_to_id = rm.id
+          WHERE bm.sender_role <> 'Restaurants' AND rm.sender_role = 'Restaurants'
+            AND to_char((bm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait'), 'YYYY-MM') = $1
+          GROUP BY bm.sender_id
+        )
+        SELECT tbo.id AS user_id, tbo.username,
+          COALESCE(tk.cnt, 0) AS tickets,
+          COALESCE(ch.cnt, 0) AS chats,
+          (COALESCE(tk.cnt, 0) + COALESCE(ch.cnt, 0))::int AS total_count,
+          (COALESCE(tk.mins, 0) + COALESCE(ch.mins, 0)) AS total_minutes,
+          sla.sla AS sla
+        FROM tbo
+        LEFT JOIN tk ON tk.uid = tbo.id
+        LEFT JOIN ch ON ch.uid = tbo.id
+        LEFT JOIN technical_kpi_sla sla ON sla.user_id = tbo.id AND sla.period_month = $1
+        ORDER BY tbo.username ASC
+      `, [month]) as any[];
+
+      const agents = rows.map((r) => {
+        const totalCount = Number(r.total_count) || 0;
+        const avgSpeed = totalCount > 0 ? Number(r.total_minutes) / totalCount : null;
+        let ftr_pct: number | null = null;
+        if (avgSpeed != null && ftrTarget != null && ftrTarget > 0) {
+          ftr_pct = avgSpeed <= 0 ? 100 : Math.min(100, Math.round((ftrTarget / avgSpeed) * 100));
+        }
+        return {
+          user_id: r.user_id,
+          username: r.username,
+          tickets: Number(r.tickets) || 0,
+          chats: Number(r.chats) || 0,
+          total_count: totalCount,
+          avg_speed_min: avgSpeed != null ? Math.round(avgSpeed * 10) / 10 : null,
+          ftr_pct,
+          sla: r.sla != null ? Number(r.sla) : null,
+          rating,
+        };
+      });
+
+      res.json({ month, ftr_target_min: ftrTarget, rating, agents });
+    } catch (error) {
+      console.error("Error fetching technical-kpi:", error);
+      res.status(500).json({ error: "Failed to fetch technical KPIs" });
+    }
+  });
+
+  // Save the month-level values (FTR target + shared Rating).
+  app.put("/api/reports/technical-kpi/month", authenticate, authorize(TECH_KPI_ROLES), async (req, res) => {
+    try {
+      const month = monthOr(req.body.month);
+      if (!month) return res.status(400).json({ error: "month (YYYY-MM) is required" });
+      const target = (req.body.ftr_target_min === '' || req.body.ftr_target_min == null) ? null : Number(req.body.ftr_target_min);
+      const rating = (req.body.rating === '' || req.body.rating == null) ? null : Number(req.body.rating);
+      if (rating != null && (rating < 0 || rating > 5)) return res.status(400).json({ error: "rating must be 0-5" });
+      if (target != null && target < 0) return res.status(400).json({ error: "target must be >= 0" });
+      await db.query(`
+        INSERT INTO technical_kpi_month (period_month, ftr_target_min, rating, updated_by, updated_at)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        ON CONFLICT (period_month) DO UPDATE
+          SET ftr_target_min = EXCLUDED.ftr_target_min, rating = EXCLUDED.rating,
+              updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+      `, [month, target, rating, (req as any).user.id]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving technical-kpi month:", error);
+      res.status(500).json({ error: "Failed to save month values" });
+    }
+  });
+
+  // Save one agent's SLA for the month.
+  app.put("/api/reports/technical-kpi/sla", authenticate, authorize(TECH_KPI_ROLES), async (req, res) => {
+    try {
+      const month = monthOr(req.body.month);
+      const userId = Number(req.body.user_id);
+      if (!month || !userId) return res.status(400).json({ error: "month and user_id are required" });
+      const sla = (req.body.sla === '' || req.body.sla == null) ? null : Number(req.body.sla);
+      if (sla != null && (sla < 0 || sla > 100)) return res.status(400).json({ error: "sla must be 0-100" });
+      await db.query(`
+        INSERT INTO technical_kpi_sla (period_month, user_id, sla, updated_by, updated_at)
+        VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
+        ON CONFLICT (period_month, user_id) DO UPDATE
+          SET sla = EXCLUDED.sla, updated_by = EXCLUDED.updated_by, updated_at = CURRENT_TIMESTAMP
+      `, [month, userId, sla, (req as any).user.id]);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error saving technical-kpi sla:", error);
+      res.status(500).json({ error: "Failed to save SLA" });
+    }
   });
 
   // ---- Branch Chat (invoice photos + comments between a branch and the office) ----
