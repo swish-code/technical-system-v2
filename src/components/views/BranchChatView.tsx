@@ -282,8 +282,20 @@ export default function BranchChatView() {
     }
   }, [lastMessage]);
 
-  // Always land on the latest message (also after images load and grow the list).
-  const scrollToBottom = () => endRef.current?.scrollIntoView({ block: 'end' });
+  // Auto-scroll to the latest message ONLY when the viewer is already at/near the
+  // bottom. If they've scrolled up to read history, respect their position — don't
+  // yank them down on refreshes, new messages, "Seen" receipts, or media loads.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(true);
+  const handleScroll = () => {
+    const el = scrollRef.current;
+    if (el) atBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  };
+  const scrollToBottom = (force = false) => {
+    if (force || atBottomRef.current) endRef.current?.scrollIntoView({ block: 'end' });
+  };
+  // Opening a thread/group → follow the latest message.
+  useEffect(() => { atBottomRef.current = true; }, [branchId, groupId]);
   useEffect(() => { scrollToBottom(); }, [messages, branchId]);
 
   const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -449,7 +461,7 @@ export default function BranchChatView() {
 
   useEffect(() => { fetchGroups(); }, []);
   useEffect(() => { fetchGroupMessages(groupId); }, [groupId]);
-  useEffect(() => { if (groupId) endRef.current?.scrollIntoView({ block: 'end' }); }, [groupMessages, groupId]);
+  useEffect(() => { if (groupId) scrollToBottom(); }, [groupMessages, groupId]);
   useEffect(() => {
     if (lastMessage?.type === 'GROUP_UPDATED') {
       fetchGroups();
@@ -569,7 +581,7 @@ export default function BranchChatView() {
             )}
           </div>
           {SearchBar}
-          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
+          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
             {groupMessages.length === 0 && (
               <p className="text-center text-zinc-400 text-xs font-bold uppercase tracking-widest mt-10">
                 {lang === 'ar' ? 'لا توجد رسائل بعد' : 'No messages yet'}
@@ -697,7 +709,7 @@ export default function BranchChatView() {
             </div>
           )}
           {SearchBar}
-          <div className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
+          <div ref={scrollRef} onScroll={handleScroll} className="flex-1 min-w-0 min-h-0 overflow-y-auto p-6 space-y-4">
             {messages.length === 0 && (
               msgLoading ? (
                 <div className="space-y-4 animate-pulse">
@@ -767,7 +779,7 @@ export default function BranchChatView() {
                           controls
                           preload="metadata"
                           className="rounded-xl max-w-full max-h-72 mb-1.5 bg-black"
-                          onLoadedMetadata={scrollToBottom}
+                          onLoadedMetadata={() => scrollToBottom()}
                         />
                       ) : (
                         <img
@@ -775,7 +787,7 @@ export default function BranchChatView() {
                           alt="invoice"
                           className="rounded-xl max-w-full max-h-72 object-cover cursor-zoom-in mb-1.5"
                           onClick={() => window.open(m.image_url!, '_blank')}
-                          onLoad={scrollToBottom}
+                          onLoad={() => scrollToBottom()}
                         />
                       )
                     )}
