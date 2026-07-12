@@ -2945,6 +2945,61 @@ async function startServer() {
     res.send("<h1>Server is running!</h1><p>If you see this, the server is listening on port 3000.</p>");
   });
 
+  // One-time media migration to R2: upload every still-local /uploads file to R2
+  // (compressing old full-size images along the way) and rewrite its DB URL, so the
+  // app STOPS serving — and being billed egress for — old media. Key-protected via
+  // MIGRATION_KEY so it can be triggered by curl without a UI session. Idempotent
+  // (only touches remaining /uploads URLs) and best-effort (skips missing files).
+  app.post("/api/admin/migrate-media-to-r2", async (req, res) => {
+    if (!process.env.MIGRATION_KEY || req.query.key !== process.env.MIGRATION_KEY) {
+      return res.status(403).json({ error: "forbidden" });
+    }
+    if (!r2Client) return res.status(400).json({ error: "R2 not configured" });
+    res.json({ started: true, note: "running in background — watch logs for [migrate] DONE" });
+    (async () => {
+      const targets = [
+        { table: "branch_messages", col: "image_url" },
+        { table: "group_messages", col: "image_url" },
+        { table: "late_order_requests", col: "attachment_url" },
+        { table: "late_order_attachments", col: "url" },
+      ];
+      const extMime: Record<string, string> = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+        ".gif": "image/gif", ".pdf": "application/pdf", ".mp4": "video/mp4", ".webm": "video/webm",
+        ".mov": "video/quicktime", ".3gp": "video/3gpp",
+      };
+      const base = (process.env.R2_PUBLIC_URL as string).replace(/\/+$/, "");
+      const doneKeys = new Set<string>();
+      let rowsUpdated = 0, missing = 0, failed = 0;
+      console.log("[migrate] starting media migration to R2...");
+      for (const { table, col } of targets) {
+        let localRows: any[] = [];
+        try { localRows = await db.all(`SELECT DISTINCT ${col} AS u FROM ${table} WHERE ${col} LIKE '/uploads/%'`); }
+        catch (e) { console.error(`[migrate] scan ${table} failed`, e); continue; }
+        for (const row of localRows) {
+          const localUrl: string = row.u;
+          const filename = localUrl.replace("/uploads/", "");
+          const localPath = path.join(uploadDir, filename);
+          const ext = path.extname(filename).toLowerCase();
+          const mime = extMime[ext] || "application/octet-stream";
+          try {
+            if (!doneKeys.has(filename)) {
+              if (!fs.existsSync(localPath)) { missing++; continue; }
+              if (mime.startsWith("image/") && mime !== "image/gif") await shrinkImageOnDisk(localPath, mime);
+              const body = await fs.promises.readFile(localPath);
+              await r2Client!.send(new PutObjectCommand({ Bucket: process.env.R2_BUCKET as string, Key: filename, Body: body, ContentType: mime }));
+              doneKeys.add(filename);
+            }
+            await db.query(`UPDATE ${table} SET ${col} = $1 WHERE ${col} = $2`, [`${base}/${filename}`, localUrl]);
+            rowsUpdated++;
+            if (rowsUpdated % 200 === 0) console.log(`[migrate] progress: ${rowsUpdated} rows, ${doneKeys.size} files uploaded`);
+          } catch (e: any) { failed++; console.error(`[migrate] ${filename} failed:`, e?.message || e); }
+        }
+      }
+      console.log(`[migrate] DONE — rowsUpdated=${rowsUpdated} filesUploaded=${doneKeys.size} missingFiles=${missing} failed=${failed}`);
+    })().catch((e) => console.error("[migrate] fatal", e));
+  });
+
   // WebSocket broadcast helper. S-15: filter delivery by role_target / user_id
   // so events with PII (DEDICATION_ALERT customer_name, etc.) only reach the
   // intended audience. Un-tagged events go to all authenticated clients.
