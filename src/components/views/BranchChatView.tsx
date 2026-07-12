@@ -535,8 +535,16 @@ export default function BranchChatView() {
   ) : null;
 
   const searchLc = chatSearch.trim().toLowerCase();
+  const activeMessages: any[] = groupId ? groupMessages : messages;
+  const searchResults = searchLc ? activeMessages.filter((m) => (m.comment || '').toLowerCase().includes(searchLc)) : [];
+  // Highlight the first occurrence of the search term inside a result preview.
+  const highlightSearch = (text: string, term: string) => {
+    const i = text.toLowerCase().indexOf(term);
+    if (i < 0) return text;
+    return (<>{text.slice(0, i)}<mark className="bg-amber-200 dark:bg-amber-500/40 text-inherit rounded px-0.5 font-bold">{text.slice(i, i + term.length)}</mark>{text.slice(i + term.length)}</>);
+  };
   const SearchBar = (
-    <div className="px-6 pt-3 pb-2 border-b border-zinc-100 dark:border-zinc-800">
+    <div className="relative px-6 pt-3 pb-2 border-b border-zinc-100 dark:border-zinc-800">
       <div className="relative">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-400" />
         <input value={chatSearch} onChange={(e) => setChatSearch(e.target.value)}
@@ -544,6 +552,28 @@ export default function BranchChatView() {
           className="w-full pl-9 pr-8 py-1.5 rounded-lg bg-zinc-50 dark:bg-zinc-800 text-xs font-medium outline-none border border-zinc-200 dark:border-zinc-700 focus:border-brand text-zinc-900 dark:text-white" />
         {chatSearch && <button onClick={() => setChatSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-red-500"><X size={14} /></button>}
       </div>
+      {/* WhatsApp-style results list: each match with sender + date, click to jump */}
+      {searchLc && (
+        <div className="absolute left-6 right-6 top-full mt-1 z-20 max-h-72 overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl divide-y divide-zinc-100 dark:divide-zinc-800">
+          <div className="sticky top-0 px-3 py-1.5 text-[10px] font-black uppercase tracking-widest text-zinc-400 bg-zinc-50/95 dark:bg-zinc-800/95 backdrop-blur">
+            {searchResults.length} {lang === 'ar' ? 'نتيجة' : (searchResults.length === 1 ? 'result' : 'results')}
+          </div>
+          {searchResults.length === 0 ? (
+            <div className="px-3 py-5 text-center text-xs font-bold text-zinc-400">{lang === 'ar' ? 'لا توجد نتائج' : 'No matches'}</div>
+          ) : (
+            searchResults.slice().reverse().map((m) => (
+              <button key={m.id} onClick={() => jumpTo(m.id)}
+                className="w-full text-left px-3 py-2 hover:bg-zinc-50 dark:hover:bg-zinc-800 transition">
+                <div className="flex items-center justify-between gap-2 mb-0.5">
+                  <span className="text-[10px] font-black uppercase tracking-tight text-brand truncate">{m.username}</span>
+                  <span className="text-[10px] font-bold text-zinc-400 shrink-0">{formatDate(m.created_at)}</span>
+                </div>
+                <p className="text-xs text-zinc-700 dark:text-zinc-300 line-clamp-2 break-words">{highlightSearch(m.comment || '', searchLc)}</p>
+              </button>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
   useEffect(() => {
