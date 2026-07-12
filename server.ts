@@ -7405,15 +7405,28 @@ async function startServer() {
             AND to_char((pr.updated_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait'), 'YYYY-MM') = $1
           GROUP BY pr.processed_by
         ),
+        -- Chat "reply" = the FIRST office message posted after a restaurant
+        -- message (matches how the ticket system clears an "awaiting reply"),
+        -- credited to that office sender. Counts plain replies too, not only
+        -- quote-replies. Excludes restaurant messages that were dismissed or
+        -- liked (those weren't answered by a reply message).
+        office AS (
+          SELECT o.id, o.branch_id, o.sender_id, o.created_at,
+            LAG(o.created_at) OVER (PARTITION BY o.branch_id ORDER BY o.created_at) AS prev_office_at
+          FROM branch_messages o WHERE o.sender_role <> 'Restaurants'
+        ),
         ch AS (
-          SELECT bm.sender_id AS uid,
-            COUNT(*)::int AS cnt,
-            SUM(EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60) AS mins
-          FROM branch_messages bm
-          JOIN branch_messages rm ON bm.reply_to_id = rm.id
-          WHERE bm.sender_role <> 'Restaurants' AND rm.sender_role = 'Restaurants'
-            AND to_char((bm.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait'), 'YYYY-MM') = $1
-          GROUP BY bm.sender_id
+          SELECT om.sender_id AS uid,
+            COUNT(rm.id)::int AS cnt,
+            SUM(EXTRACT(EPOCH FROM (om.created_at - rm.created_at)) / 60) AS mins
+          FROM office om
+          JOIN branch_messages rm ON rm.branch_id = om.branch_id AND rm.sender_role = 'Restaurants'
+            AND rm.resolved_at IS NULL
+            AND rm.created_at < om.created_at
+            AND (om.prev_office_at IS NULL OR rm.created_at > om.prev_office_at)
+            AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = rm.id)
+          WHERE to_char((om.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait'), 'YYYY-MM') = $1
+          GROUP BY om.sender_id
         )
         SELECT tbo.id AS user_id, tbo.username,
           COALESCE(tk.cnt, 0) AS tickets,
@@ -8150,22 +8163,35 @@ async function startServer() {
     const tRow = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;
     const target = tRow?.value != null ? Number(tRow.value) : null;
 
-    // Replies
+    // Replies — a "reply" is the FIRST office message after a restaurant
+    // message (matches how the ticket queue clears), credited to that office
+    // sender. Counts plain replies too, not just quote-replies; excludes
+    // dismissed + liked restaurant messages. buildChatFilters conditions apply
+    // to the office message (aliased bm) and its role (ro).
     const rf = buildChatFilters(req.query, reqUser, 'bm', 'bm.sender_id', 'bm.created_at');
-    const replyConds = [...rf.conds, `bm.sender_role <> 'Restaurants'`, `rm.sender_role = 'Restaurants'`];
+    const replyConds = [...rf.conds];
     const replyParams = [...rf.params];
     let withinSelect = `, NULL::int AS within_target`;
     if (target != null) { replyParams.push(target); withinSelect = `, COUNT(*) FILTER (WHERE r.resp_min <= $${replyParams.length})::int AS within_target`; }
 
     const replyRows = await db.all(`
-      WITH r AS (
+      WITH office AS (
+        SELECT o.id, o.brand_id, o.branch_id, o.sender_id, o.created_at,
+          LAG(o.created_at) OVER (PARTITION BY o.branch_id ORDER BY o.created_at) AS prev_office_at
+        FROM branch_messages o WHERE o.sender_role <> 'Restaurants'
+      ),
+      r AS (
         SELECT u.id AS uid, u.username,
           EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60 AS resp_min
-        FROM branch_messages bm
-        JOIN branch_messages rm ON bm.reply_to_id = rm.id
+        FROM office bm
+        JOIN branch_messages rm ON rm.branch_id = bm.branch_id AND rm.sender_role = 'Restaurants'
+          AND rm.resolved_at IS NULL
+          AND rm.created_at < bm.created_at
+          AND (bm.prev_office_at IS NULL OR rm.created_at > bm.prev_office_at)
+          AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = rm.id)
         JOIN users u ON bm.sender_id = u.id
         JOIN roles ro ON u.role_id = ro.id
-        WHERE ${replyConds.join(' AND ')}
+        WHERE ${replyConds.length ? replyConds.join(' AND ') : 'TRUE'}
       )
       SELECT r.uid AS user_id, r.username,
         COUNT(*)::int AS replies,
@@ -8209,23 +8235,33 @@ async function startServer() {
       const tRow = await db.get("SELECT value FROM performance_targets WHERE metric = 'chat_reply_min'") as any;
       const target = tRow?.value != null ? Number(tRow.value) : null;
 
-      // Replies
+      // Replies — first office message after a restaurant message (see the
+      // per-user chat-performance for the full rationale), grouped by brand.
       const rf = buildChatFilters(req.query, reqUser, 'bm', 'bm.sender_id', 'bm.created_at');
-      const replyConds = [...rf.conds, `bm.sender_role <> 'Restaurants'`, `rm.sender_role = 'Restaurants'`];
+      const replyConds = [...rf.conds];
       const replyParams = [...rf.params];
       let withinSelect = `, NULL::int AS within_target`;
       if (target != null) { replyParams.push(target); withinSelect = `, COUNT(*) FILTER (WHERE r.resp_min <= $${replyParams.length})::int AS within_target`; }
 
       const replyRows = await db.all(`
-        WITH r AS (
+        WITH office AS (
+          SELECT o.id, o.brand_id, o.branch_id, o.sender_id, o.created_at,
+            LAG(o.created_at) OVER (PARTITION BY o.branch_id ORDER BY o.created_at) AS prev_office_at
+          FROM branch_messages o WHERE o.sender_role <> 'Restaurants'
+        ),
+        r AS (
           SELECT b.name AS brand,
             EXTRACT(EPOCH FROM (bm.created_at - rm.created_at)) / 60 AS resp_min
-          FROM branch_messages bm
-          JOIN branch_messages rm ON bm.reply_to_id = rm.id
+          FROM office bm
+          JOIN branch_messages rm ON rm.branch_id = bm.branch_id AND rm.sender_role = 'Restaurants'
+            AND rm.resolved_at IS NULL
+            AND rm.created_at < bm.created_at
+            AND (bm.prev_office_at IS NULL OR rm.created_at > bm.prev_office_at)
+            AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = rm.id)
           JOIN users u ON bm.sender_id = u.id
           JOIN roles ro ON u.role_id = ro.id
           JOIN brands b ON bm.brand_id = b.id
-          WHERE ${replyConds.join(' AND ')}
+          WHERE ${replyConds.length ? replyConds.join(' AND ') : 'TRUE'}
         )
         SELECT r.brand,
           COUNT(*)::int AS replies,
