@@ -3552,12 +3552,15 @@ async function startServer() {
             `, [productNameFieldId, id]) as any;
 
             if (item) {
-              await logAction(request.user_id, "UNHIDE", "products", item.product_id, { 
-                product_name: item.product_name || 'Unknown Product', 
+              // Credit the AGENT who processed the request (so it shows in their
+              // KPI); keep the original requester recorded in the payload.
+              await logAction(processorUserId, "UNHIDE", "products", item.product_id, {
+                product_name: item.product_name || 'Unknown Product',
                 brand_name: item.brand_name || 'Unknown Brand',
                 branch: item.branch_name || 'All Branches',
                 brand_id: item.brand_id,
-                branch_id: item.branch_id
+                branch_id: item.branch_id,
+                requested_by: request.user_id
               }, null);
 
               await db.query(`
@@ -3621,14 +3624,15 @@ async function startServer() {
 
               // Log one HIDE per branch (matching the direct hide path) so each
               // branch's later UNHIDE pairs with it by exact product+branch key.
-              await logAction(request.user_id, "HIDE", "products", productId, {
+              await logAction(processorUserId, "HIDE", "products", productId, {
                 product_name: product?.name || 'Unknown Product',
                 brand_name: brand?.name || 'Unknown Brand',
                 branch: branch.name,
                 brand_id: data.brand_id,
                 branch_id: branch.id,
                 reason: data.reason,
-                responsible_party: data.responsible_party
+                responsible_party: data.responsible_party,
+                requested_by: request.user_id
               }, null);
             }
           }
@@ -3669,14 +3673,15 @@ async function startServer() {
               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
             `, [request.user_id, data.brand_id, data.branch_id, productId, 'HIDE', data.agent_name, data.reason, data.action_to_unhide, data.comment, data.requested_at, data.responsible_party]);
 
-            await logAction(request.user_id, "HIDE", "products", productId, {
+            await logAction(processorUserId, "HIDE", "products", productId, {
               product_name: product?.name || 'Unknown Product',
               brand_name: brand?.name || 'Unknown Brand',
               branch: branch?.name || 'Unknown Branch',
               brand_id: data.brand_id,
               branch_id: data.branch_id,
               reason: data.reason,
-              responsible_party: data.responsible_party
+              responsible_party: data.responsible_party,
+              requested_by: request.user_id
             }, null);
           }
           broadcast({

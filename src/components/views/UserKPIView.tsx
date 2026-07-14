@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../context/AuthContext';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { 
   Clock, 
@@ -41,6 +42,7 @@ import { useFetch } from '../../hooks/useFetch';
 export default function UserKPIView() {
   const { user, lang } = useAuth();
   const { fetchWithAuth } = useFetch();
+  const lastMessage = useWebSocket();
   const [userKpi, setUserKpi] = useState<UserKpi[]>([]);
   const [userActivityDetails, setUserActivityDetails] = useState<UserActivityDetail[]>([]);
   const [loading, setLoading] = useState(true);
@@ -63,8 +65,8 @@ export default function UserKPIView() {
     } catch { setDrillRows([]); } finally { setDrillLoading(false); }
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (silent = false) => {
+    if (!silent) setLoading(true);
 
     try {
       const [kpiRes, detailsRes, teamRes, targetRes, chatRes, chatTargetRes] = await Promise.all([
@@ -86,7 +88,7 @@ export default function UserKPIView() {
       if (error.isAuthError) return;
       console.error("Error fetching user KPI:", error);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
@@ -139,6 +141,29 @@ export default function UserKPIView() {
   useEffect(() => {
     fetchData();
   }, [period]);
+
+  // Live refresh: when an agent completes a request/ticket (the events that
+  // write the audit_logs rows these cards count), silently refetch. Debounced
+  // to at most once per few seconds and skipped while the tab is hidden, so it
+  // adds negligible server load.
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const t = lastMessage?.type;
+    const relevant =
+      t === 'PENDING_REQUEST_UPDATED' || t === 'PENDING_REQUEST_CREATED' ||
+      t === 'TICKETS_UPDATED' || t === 'HIDDEN_ITEMS_UPDATED' ||
+      t === 'BUSY_PERIOD_UPDATED' || t === 'BUSY_PERIOD_CREATED';
+    if (!relevant) return;
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (refreshTimer.current) clearTimeout(refreshTimer.current);
+    refreshTimer.current = setTimeout(() => {
+      refreshTimer.current = null;
+      fetchData(true);
+    }, 4000);
+  }, [lastMessage]);
+
+  // Clear any pending debounce on unmount.
+  useEffect(() => () => { if (refreshTimer.current) clearTimeout(refreshTimer.current); }, []);
 
   const renderActionDetails = (log: UserActivityDetail) => {
     try {
