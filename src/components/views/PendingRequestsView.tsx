@@ -147,8 +147,23 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
 
   const pickTicket = (type: string, id: number) =>
     ticketAction('claim', { ticket_type: type, ticket_id: id }, type);
-  const doneTicket = (type: string, id: number) =>
-    ticketAction('done', { ticket_type: type, ticket_id: id }, type);
+  // "Mark Done" for a chat ticket doubles as Send: it posts the typed reply (or
+  // an auto completion message when the box is empty) so the store gets a real
+  // message and the ticket clears, then records the task + closes the assignment.
+  const doneTicket = async (type: string, id: number, branchId?: number) => {
+    if (type === 'chat' && branchId) {
+      const text = (replyDrafts[id] || '').trim() || 'تم إنجاز طلبك ✅';
+      setSendingReplyId(id);
+      try {
+        const fd = new FormData();
+        fd.append('branch_id', String(branchId));
+        fd.append('comment', text);
+        await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
+        setReplyDrafts((prev) => { const n = { ...prev }; delete n[id]; return n; });
+      } catch { /* ignore */ } finally { setSendingReplyId(null); }
+    }
+    return ticketAction('done', { ticket_type: type, ticket_id: id }, type);
+  };
   const releaseTicket = (type: string, id: number) =>
     ticketAction('release', { ticket_type: type, ticket_id: id }, type);
   const transferTicket = (type: string, id: number, toId: number) => {
@@ -391,7 +406,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   );
 
   // Reusable ticket workflow controls. Wired into the PENDING view only.
-  const renderTicketControls = (type: string, id: number, _brandId?: number) => {
+  const renderTicketControls = (type: string, id: number, _brandId?: number, branchId?: number) => {
     const key = keyOf(type, id);
     const busy = ticketBusyKey === key;
     const spinner = <Loader2 size={16} className="animate-spin" />;
@@ -405,12 +420,14 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
             <LiveTimer since={ticketMine.assigned_at} />
           </span>
           <button
-            onClick={() => doneTicket(type, id)}
-            disabled={busy}
+            onClick={() => doneTicket(type, id, branchId)}
+            disabled={busy || (type === 'chat' && sendingReplyId === id)}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white rounded-lg font-bold text-sm hover:bg-emerald-600 transition-all disabled:opacity-50 active:scale-95"
           >
-            {busy ? spinner : <CheckCheck size={16} />}
-            {lang === 'en' ? 'Mark Done' : 'تم الإنجاز'}
+            {(busy || (type === 'chat' && sendingReplyId === id)) ? spinner : <CheckCheck size={16} />}
+            {type === 'chat'
+              ? (lang === 'en' ? 'Send & Done' : 'إرسال وإنهاء')
+              : (lang === 'en' ? 'Mark Done' : 'تم الإنجاز')}
           </button>
           {transferOpenKey === key ? renderTransferPicker(type, id) : (
             <button
@@ -663,7 +680,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                 {/* Ticket workflow — pick, reply, mark done */}
                 {user?.role_name !== 'Restaurants' && (
                   <div className="flex flex-wrap items-center gap-2">
-                    {renderTicketControls('chat', t.id, t.brand_id)}
+                    {renderTicketControls('chat', t.id, t.brand_id, t.branch_id)}
                   </div>
                 )}
                 {/* Inline reply — sends a real chat message; the ticket clears once answered */}
