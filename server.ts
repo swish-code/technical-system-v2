@@ -3937,7 +3937,20 @@ async function startServer() {
       const a = await db.get(`
         SELECT id, assigned_to, brand_id, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int AS secs
         FROM ticket_assignments WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'`, [ticket_type, ticket_id]) as any;
-      if (!a) return res.status(404).json({ error: "No active assignment for this ticket" });
+      if (!a) {
+        // Chat tickets can be auto-completed by the reply itself (the branch-chat
+        // POST closes the sender's hold). The Send & Done button then calls this
+        // endpoint a moment later — treat that as already done, not an error.
+        if (ticket_type === 'chat') {
+          const prev = await db.get(`
+            SELECT 1 FROM ticket_assignments
+            WHERE ticket_type = 'chat' AND ticket_id = $1 AND status IN ('done','released')
+              AND (assigned_to = $2 OR done_by = $2)
+            ORDER BY id DESC LIMIT 1`, [ticket_id, user.id]);
+          if (prev) return res.json({ success: true, already: true });
+        }
+        return res.status(404).json({ error: "No active assignment for this ticket" });
+      }
       if (a.assigned_to !== user.id && !isAdmin) return res.status(403).json({ error: "This ticket is assigned to another agent" });
 
       let data: any = {};
@@ -3949,15 +3962,22 @@ async function startServer() {
           if (request.status === 'Pending') await applyPendingRequest(request, user.id);
         }
       }
-      const durationSeconds = Math.max(1, Number(a.secs) || 1);
+      // Atomic claim of the completion: only the caller that flips in_progress →
+      // done logs the task, so a concurrent auto-complete (chat reply) can never
+      // produce a duplicate activity_logs row.
+      const won = await db.get(`
+        UPDATE ticket_assignments SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
+          duration_seconds = GREATEST(1, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int)
+        WHERE id = $2 AND status = 'in_progress'
+        RETURNING id, duration_seconds`, [user.id, a.id]) as any;
+      if (!won) return res.json({ success: true, already: true });
+      const durationSeconds = Math.max(1, Number(won.duration_seconds) || 1);
       const activity = ticketActivity(ticket_type, data);
       const ins = await db.query(`
         INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
         VALUES ('technical', 'Technical', $1, 'Completed', $2, $3, $4, $5, $6) RETURNING id`,
         [activity, durationSeconds, a.brand_id, `Ticket #${ticket_id} (${ticket_type})`, user.id, user.username]);
-      await db.query(`
-        UPDATE ticket_assignments SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
-          duration_seconds = $2, task_log_id = $3 WHERE id = $4`, [user.id, durationSeconds, ins.rows[0].id, a.id]);
+      await db.query("UPDATE ticket_assignments SET task_log_id = $1 WHERE id = $2", [ins.rows[0].id, won.id]);
       broadcast({ type: "TICKETS_UPDATED" });
       broadcast({ type: "PENDING_REQUEST_UPDATED" });
       res.json({ success: true, duration_seconds: durationSeconds });
@@ -7981,6 +8001,42 @@ async function startServer() {
     try {
       broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
     } catch (e) { console.error("branch-chat unread-badge broadcast failed", e); }
+
+    // Ticket workflow sync: an office reply ANSWERS this branch's chat tickets
+    // (that's what removes them from the Requests-tab list), so completing the
+    // assignment must not depend on which screen the reply came from.
+    //  - The SENDER's own in-progress chat hold on this branch → mark done +
+    //    auto-log the task (duration = pick → this reply). Atomic UPDATE ...
+    //    WHERE status='in_progress' so a concurrent /api/tickets/done (the
+    //    Send & Done button) can never double-log the same task.
+    //  - OTHER agents' holds on this branch are now stale (someone else
+    //    answered) → release them so they aren't stuck "in progress" forever.
+    if (!fromRestaurant) {
+      try {
+        const doneRow = await db.get(`
+          UPDATE ticket_assignments ta
+          SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
+              duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ta.assigned_at))::int
+          WHERE ta.status = 'in_progress' AND ta.ticket_type = 'chat' AND ta.assigned_to = $1
+            AND EXISTS (SELECT 1 FROM branch_messages rm WHERE rm.id = ta.ticket_id AND rm.branch_id = $2)
+          RETURNING ta.id, ta.ticket_id, ta.duration_seconds, ta.brand_id
+        `, [user.id, branch.id]) as any;
+        if (doneRow) {
+          const taskIns = await db.query(`
+            INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
+            VALUES ('technical', 'Technical', 'Invoice Chat', 'Completed', $1, $2, $3, $4, $5) RETURNING id`,
+            [Math.max(1, Number(doneRow.duration_seconds) || 1), doneRow.brand_id, `Ticket #${doneRow.ticket_id} (chat)`, user.id, user.username]);
+          await db.query("UPDATE ticket_assignments SET task_log_id = $1 WHERE id = $2", [taskIns.rows[0].id, doneRow.id]);
+        }
+        const releasedOthers = await db.query(`
+          UPDATE ticket_assignments ta
+          SET status = 'released', done_at = CURRENT_TIMESTAMP
+          WHERE ta.status = 'in_progress' AND ta.ticket_type = 'chat' AND ta.assigned_to <> $1
+            AND EXISTS (SELECT 1 FROM branch_messages rm WHERE rm.id = ta.ticket_id AND rm.branch_id = $2)
+        `, [user.id, branch.id]);
+        if (doneRow || (releasedOthers.rowCount || 0) > 0) broadcast({ type: "TICKETS_UPDATED" });
+      } catch (e) { console.error("branch-chat ticket sync failed", e); }
+    }
 
     // Throttled browser push: at most ONE push per branch per minute, so bursts
     // of messages can't flood the pipeline (the reason chat push was disabled) or
