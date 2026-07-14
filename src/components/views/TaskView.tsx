@@ -38,6 +38,8 @@ export default function TaskView() {
   const [newActivity, setNewActivity] = useState('');
   const [newStatus, setNewStatus] = useState('');
   const [newStatusCounts, setNewStatusCounts] = useState(false);
+  const [agents, setAgents] = useState<any[]>([]);
+  const [agentId, setAgentId] = useState('');
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -46,14 +48,23 @@ export default function TaskView() {
     try { const r = await fetchWithAuth(`${API_URL}/brands`); if (r.ok) setBrands(await r.json()); } catch { /* ignore */ }
   };
   const fetchLogs = async () => {
-    try { const r = await fetchWithAuth(`${API_URL}/task-logs?date=${date}`); if (r.ok) setLogs(await r.json()); } catch { /* ignore */ }
+    try {
+      const qs = new URLSearchParams({ date });
+      if (agentId) qs.set('agent_id', agentId);
+      const r = await fetchWithAuth(`${API_URL}/task-logs?${qs.toString()}`);
+      if (r.ok) setLogs(await r.json());
+    } catch { /* ignore */ }
+  };
+  const fetchAgents = async () => {
+    try { const r = await fetchWithAuth(`${API_URL}/task-logs/agents`); if (r.ok) setAgents(await r.json()); } catch { /* ignore */ }
   };
   const fetchSummary = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
 
-  useEffect(() => { fetchConfig(); fetchBrands(); }, []);
-  useEffect(() => { fetchLogs(); fetchSummary(); }, [date]);
+  useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); }, []);
+  useEffect(() => { fetchLogs(); }, [date, agentId]);
+  useEffect(() => { fetchSummary(); }, [date]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
   const canSave = !!activityType && !!status && minutes > 0 && !saving;
@@ -255,8 +266,17 @@ export default function TaskView() {
       <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
         <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="font-black text-zinc-900 dark:text-white">{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</h2>
-          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-            className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+          <div className="flex items-center gap-2 flex-wrap">
+            {isAdmin && (
+              <select value={agentId} onChange={(e) => setAgentId(e.target.value)}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white cursor-pointer">
+                <option value="">{ar ? 'كل الموظفين' : 'All employees'}</option>
+                {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+              </select>
+            )}
+            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+              className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">

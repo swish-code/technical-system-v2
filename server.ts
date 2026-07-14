@@ -3245,6 +3245,12 @@ async function startServer() {
     res.json({ totals, byStatus, byActivity, byAgent });
   });
 
+  // Distinct employees who have logged tasks — powers the Team Logs employee filter.
+  app.get("/api/task-logs/agents", authenticate, authorize(TASK_ADMIN_ROLES), async (_req, res) => {
+    const rows = await db.all("SELECT DISTINCT agent_id AS id, agent_name AS name FROM activity_logs ORDER BY agent_name");
+    res.json(rows);
+  });
+
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
     const name = (req.body.name || '').trim();
