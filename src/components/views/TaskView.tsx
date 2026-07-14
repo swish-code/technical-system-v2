@@ -29,7 +29,13 @@ export default function TaskView() {
 
   // Data
   const today = new Date().toISOString().slice(0, 10);
+  const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
   const [date, setDate] = useState(today);
+  const [dateFrom, setDateFrom] = useState(weekAgo);
+  const [dateTo, setDateTo] = useState(today);
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
+  const pageSize = 20;
   const [logs, setLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
   const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config'>('new');
@@ -49,10 +55,10 @@ export default function TaskView() {
   };
   const fetchLogs = async () => {
     try {
-      const qs = new URLSearchParams({ date });
+      const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, page: String(page) });
       if (agentId) qs.set('agent_id', agentId);
       const r = await fetchWithAuth(`${API_URL}/task-logs?${qs.toString()}`);
-      if (r.ok) setLogs(await r.json());
+      if (r.ok) { const d = await r.json(); setLogs(d.logs || []); setTotal(d.total || 0); }
     } catch { /* ignore */ }
   };
   const fetchAgents = async () => {
@@ -63,7 +69,7 @@ export default function TaskView() {
   };
 
   useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); }, []);
-  useEffect(() => { fetchLogs(); }, [date, agentId]);
+  useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
   useEffect(() => { fetchSummary(); }, [date]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
@@ -268,14 +274,19 @@ export default function TaskView() {
           <h2 className="font-black text-zinc-900 dark:text-white">{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</h2>
           <div className="flex items-center gap-2 flex-wrap">
             {isAdmin && (
-              <select value={agentId} onChange={(e) => setAgentId(e.target.value)}
+              <select value={agentId} onChange={(e) => { setAgentId(e.target.value); setPage(1); }}
                 className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white cursor-pointer">
                 <option value="">{ar ? 'كل الموظفين' : 'All employees'}</option>
                 {agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
             )}
-            <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-              className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+            <div className="flex items-center gap-1.5">
+              <input type="date" value={dateFrom} max={dateTo} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+              <span className="text-zinc-400 font-black text-xs">{ar ? 'إلى' : 'to'}</span>
+              <input type="date" value={dateTo} min={dateFrom} onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+            </div>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -292,7 +303,7 @@ export default function TaskView() {
             </thead>
             <tbody>
               {logs.length === 0 && (
-                <tr><td colSpan={isAdmin ? 6 : 5} className="text-center text-zinc-400 font-bold py-10">{ar ? 'لا توجد سجلات في هذا اليوم' : 'No logs for this day'}</td></tr>
+                <tr><td colSpan={isAdmin ? 6 : 5} className="text-center text-zinc-400 font-bold py-10">{ar ? 'لا توجد سجلات في هذه الفترة' : 'No logs in this range'}</td></tr>
               )}
               {logs.map((l) => (
                 <tr key={l.id} className="border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
@@ -307,6 +318,24 @@ export default function TaskView() {
             </tbody>
           </table>
         </div>
+        {total > pageSize && (
+          <div className="px-5 py-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
+            <span className="text-xs font-bold text-zinc-400">
+              {(page - 1) * pageSize + 1}–{Math.min(page * pageSize, total)} {ar ? 'من' : 'of'} {total}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} disabled={page <= 1}
+                className="px-3 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm font-black text-zinc-600 dark:text-zinc-300 disabled:opacity-40 hover:text-brand transition">
+                {ar ? 'السابق' : 'Prev'}
+              </button>
+              <span className="text-sm font-black text-zinc-700 dark:text-zinc-200 px-2">{page} / {Math.ceil(total / pageSize)}</span>
+              <button onClick={() => setPage(p => Math.min(Math.ceil(total / pageSize), p + 1))} disabled={page >= Math.ceil(total / pageSize)}
+                className="px-3 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-sm font-black text-zinc-600 dark:text-zinc-300 disabled:opacity-40 hover:text-brand transition">
+                {ar ? 'التالي' : 'Next'}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       )}
 

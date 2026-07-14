@@ -3213,17 +3213,23 @@ async function startServer() {
     if (req.query.status) { params.push(req.query.status); conds.push(`al.status = $${params.length}`); }
     if (req.query.activity_type) { params.push(req.query.activity_type); conds.push(`al.activity_type = $${params.length}`); }
     if (req.query.date) { params.push(req.query.date); conds.push(`(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length}`); }
+    if (req.query.date_from) { params.push(req.query.date_from); conds.push(`(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length}`); }
+    if (req.query.date_to) { params.push(req.query.date_to); conds.push(`(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length}`); }
     return { isAdmin, where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
   };
 
   // List logs (All / Team Logs section).
   app.get("/api/task-logs", authenticate, authorize(TASK_ROLES), async (req, res) => {
     const { where, params } = taskFilters(req);
+    const pageSize = 20;
+    const page = Math.max(1, Number(req.query.page) || 1);
+    const offset = (page - 1) * pageSize;
+    const totalRow = await db.get(`SELECT COUNT(*)::int AS n FROM activity_logs al ${where}`, params);
     const rows = await db.all(
       `SELECT al.id, al.activity_type, al.status, al.duration_seconds, al.notes, al.agent_name, al.created_at, b.name AS brand_name
        FROM activity_logs al LEFT JOIN brands b ON al.brand_id = b.id
-       ${where} ORDER BY al.created_at DESC LIMIT 500`, params);
-    res.json(rows);
+       ${where} ORDER BY al.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`, params);
+    res.json({ logs: rows, total: (totalRow?.n ?? 0), page, pageSize });
   });
 
   // Dashboard aggregates: totals, productive time (counts_time statuses only),
