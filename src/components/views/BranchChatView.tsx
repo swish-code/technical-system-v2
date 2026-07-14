@@ -86,8 +86,8 @@ export default function BranchChatView() {
   const [branchId, setBranchId] = useState<number | null>(isRestaurant ? (user?.branch_id ?? null) : null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [comment, setComment] = useState('');
-  const [image, setImage] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [images, setImages] = useState<File[]>([]);
+  const [imagePreviews, setImagePreviews] = useState<string[]>([]);
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [flashId, setFlashId] = useState<number | null>(null);
@@ -298,63 +298,64 @@ export default function BranchChatView() {
   useEffect(() => { atBottomRef.current = true; }, [branchId, groupId]);
   useEffect(() => { scrollToBottom(); }, [messages, branchId]);
 
-  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    if (f) {
-      // Server caps uploads at 50MB (images + short video clips). Guard here too
-      // so an oversized pick fails fast with a clear message instead of a 500.
+  // Add one or more picked/pasted files to the composer (multi-image support).
+  const addFiles = async (files: FileList | File[]) => {
+    for (const f of Array.from(files)) {
+      // Server caps uploads at 50MB (images + short video clips). Guard here too.
       if (f.size > 50 * 1024 * 1024) {
         alert(lang === 'ar' ? 'الملف كبير جدًا — الحد الأقصى 50 ميجابايت' : 'File too large — max 50MB');
-        e.target.value = ''; return;
+        continue;
       }
-      // Shrink photos in the browser before upload so invoices send fast and
-      // open fast for the office. Non-images (video/pdf) pass through untouched.
+      // Shrink photos in the browser before upload. Non-images pass through untouched.
       const picked = await compressImage(f);
-      setImage(picked);
-      const r = new FileReader();
-      r.onloadend = () => setImagePreview(r.result as string);
-      r.readAsDataURL(picked);
+      const preview = await new Promise<string>((resolve) => {
+        const r = new FileReader();
+        r.onloadend = () => resolve(r.result as string);
+        r.readAsDataURL(picked);
+      });
+      setImages((prev) => [...prev, picked]);
+      setImagePreviews((prev) => [...prev, preview]);
     }
+  };
+  const pickFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.length) await addFiles(e.target.files);
     e.target.value = '';
   };
+  const removeImageAt = (i: number) => {
+    setImages((prev) => prev.filter((_, idx) => idx !== i));
+    setImagePreviews((prev) => prev.filter((_, idx) => idx !== i));
+  };
 
-  // Paste an image from the clipboard (e.g. a screenshot) straight into the composer.
+  // Paste image(s) from the clipboard (e.g. a screenshot) straight into the composer.
   const handlePaste = (e: React.ClipboardEvent) => {
     const items = e.clipboardData?.items;
     if (!items) return;
+    const files: File[] = [];
     for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      if (item.type.startsWith('image/')) {
-        const f = item.getAsFile();
-        if (f) {
-          e.preventDefault();
-          compressImage(f).then((picked) => {
-            setImage(picked);
-            const r = new FileReader();
-            r.onloadend = () => setImagePreview(r.result as string);
-            r.readAsDataURL(picked);
-          });
-        }
-        break;
-      }
+      if (items[i].type.startsWith('image/')) { const f = items[i].getAsFile(); if (f) files.push(f); }
     }
+    if (files.length) { e.preventDefault(); addFiles(files); }
   };
 
   const send = async () => {
-    if (!branchId || (!comment.trim() && !image) || sending) return;
+    if (!branchId || (!comment.trim() && images.length === 0) || sending) return;
     setSending(true);
     try {
-      const fd = new FormData();
-      fd.append('branch_id', String(branchId));
-      if (comment.trim()) fd.append('comment', comment.trim());
-      if (image) fd.append('image', image);
-      if (replyTo) fd.append('reply_to_id', String(replyTo.id));
-      const res = await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
-      if (res.ok) {
-        setComment(''); setImage(null); setImagePreview(null); setReplyTo(null);
-        await fetchMessages(branchId);
-        if (!isRestaurant) fetchThreads();
+      // Each image goes as its own message (schema is one image per message); the
+      // typed comment + reply ride on the first message only.
+      const list: (File | null)[] = images.length ? images : [null];
+      for (let i = 0; i < list.length; i++) {
+        const fd = new FormData();
+        fd.append('branch_id', String(branchId));
+        if (i === 0 && comment.trim()) fd.append('comment', comment.trim());
+        if (list[i]) fd.append('image', list[i] as File);
+        if (i === 0 && replyTo) fd.append('reply_to_id', String(replyTo.id));
+        const res = await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
+        if (!res.ok) break;
       }
+      setComment(''); setImages([]); setImagePreviews([]); setReplyTo(null);
+      await fetchMessages(branchId);
+      if (!isRestaurant) fetchThreads();
     } catch (e) { /* ignore */ } finally { setSending(false); }
   };
 
@@ -401,7 +402,7 @@ export default function BranchChatView() {
   // Open a group thread (mutually exclusive with a branch thread).
   const openGroup = (gid: number) => {
     setGroupId(gid); setBranchId(null);
-    setComment(''); setImage(null); setImagePreview(null); setReplyTo(null); setGroupReplyTo(null);
+    setComment(''); setImages([]); setImagePreviews([]); setReplyTo(null); setGroupReplyTo(null);
   };
 
   const createGroup = async () => {
@@ -447,15 +448,21 @@ export default function BranchChatView() {
   };
 
   const sendGroup = async () => {
-    if (!groupId || (!comment.trim() && !image) || sending) return;
+    if (!groupId || (!comment.trim() && images.length === 0) || sending) return;
     setSending(true);
     try {
-      const fd = new FormData();
-      if (comment.trim()) fd.append('comment', comment.trim());
-      if (image) fd.append('image', image);
-      if (groupReplyTo) fd.append('reply_to_id', String(groupReplyTo.id));
-      const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/messages`, { method: 'POST', body: fd });
-      if (res.ok) { setComment(''); setImage(null); setImagePreview(null); setGroupReplyTo(null); await fetchGroupMessages(groupId); }
+      // One message per image (schema is one image per message); comment + reply
+      // ride on the first message only.
+      const list: (File | null)[] = images.length ? images : [null];
+      for (let i = 0; i < list.length; i++) {
+        const fd = new FormData();
+        if (i === 0 && comment.trim()) fd.append('comment', comment.trim());
+        if (list[i]) fd.append('image', list[i] as File);
+        if (i === 0 && groupReplyTo) fd.append('reply_to_id', String(groupReplyTo.id));
+        const res = await fetchWithAuth(`${API_URL}/chat-groups/${groupId}/messages`, { method: 'POST', body: fd });
+        if (!res.ok) break;
+      }
+      setComment(''); setImages([]); setImagePreviews([]); setGroupReplyTo(null); await fetchGroupMessages(groupId);
     } catch { /* ignore */ } finally { setSending(false); }
   };
 
@@ -688,19 +695,23 @@ export default function BranchChatView() {
                 </button>
               </div>
             )}
-            {imagePreview && (
-              <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
-                {(image?.type || '').startsWith('video/')
-                  ? <video src={imagePreview} muted className="w-full h-full object-cover bg-black" />
-                  : <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />}
-                <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
+            {imagePreviews.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {imagePreviews.map((src, i) => (
+                  <div key={i} className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-brand/20">
+                    {(images[i]?.type || '').startsWith('video/')
+                      ? <video src={src} muted className="w-full h-full object-cover bg-black" />
+                      : <img src={src} alt="preview" className="w-full h-full object-cover" />}
+                    <button onClick={() => removeImageAt(i)} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
+                  </div>
+                ))}
               </div>
             )}
             {MentionBox}
             <div className="flex items-center gap-2">
               <label className="shrink-0 p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand cursor-pointer transition" title={lang === 'ar' ? 'صورة أو فيديو' : 'Image or video'}>
                 <Paperclip size={18} />
-                <input type="file" accept="image/*,video/*" className="hidden" onChange={pickFile} />
+                <input type="file" accept="image/*,video/*" multiple className="hidden" onChange={pickFile} />
               </label>
               <input
                 value={comment}
@@ -709,7 +720,7 @@ export default function BranchChatView() {
                 onPaste={handlePaste}
                 placeholder={lang === 'ar' ? 'اكتب رسالة...' : 'Write a message...'}
                 className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
-              <button onClick={sendGroup} disabled={sending || (!comment.trim() && !image)}
+              <button onClick={sendGroup} disabled={sending || (!comment.trim() && images.length === 0)}
                 className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
                 <Send size={18} />
               </button>
@@ -903,14 +914,18 @@ export default function BranchChatView() {
                 </button>
               </div>
             )}
-            {imagePreview && (
-              <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
-                {(image?.type || '').startsWith('video/')
-                  ? <video src={imagePreview} muted className="w-full h-full object-cover bg-black" />
-                  : <img src={imagePreview} alt="preview" className="w-full h-full object-cover" />}
-                <button onClick={() => { setImage(null); setImagePreview(null); }} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full">
-                  <X size={12} />
-                </button>
+            {imagePreviews.length > 0 && (
+              <div className="flex flex-wrap gap-2 mb-2">
+                {imagePreviews.map((src, i) => (
+                  <div key={i} className="relative w-20 h-20 rounded-xl overflow-hidden border-2 border-brand/20">
+                    {(images[i]?.type || '').startsWith('video/')
+                      ? <video src={src} muted className="w-full h-full object-cover bg-black" />
+                      : <img src={src} alt="preview" className="w-full h-full object-cover" />}
+                    <button onClick={() => removeImageAt(i)} className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full">
+                      <X size={12} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
             {MentionBox}
@@ -921,7 +936,7 @@ export default function BranchChatView() {
               </label>
               <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand" title={lang === 'ar' ? 'إرفاق صورة أو فيديو' : 'Attach image or video'}>
                 <Paperclip size={20} />
-                <input type="file" accept="image/*,video/*" className="hidden" onChange={pickFile} />
+                <input type="file" accept="image/*,video/*" multiple className="hidden" onChange={pickFile} />
               </label>
               <input
                 type="text"
@@ -932,7 +947,7 @@ export default function BranchChatView() {
                 placeholder={lang === 'ar' ? 'اكتب تعليقًا...' : 'Write a comment...'}
                 className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
               />
-              <button onClick={send} disabled={sending || (!comment.trim() && !image)} className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
+              <button onClick={send} disabled={sending || (!comment.trim() && images.length === 0)} className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
                 <Send size={20} />
               </button>
             </div>
