@@ -3843,9 +3843,15 @@ async function startServer() {
   // Resolve a ticket's brand/branch + whether it's still open (claimable).
   const getTicketMeta = async (ticketType: string, ticketId: number) => {
     if (ticketType === 'chat') {
-      const m = await db.get("SELECT brand_id, branch_id, sender_role, resolved_at FROM branch_messages WHERE id = $1", [ticketId]) as any;
+      const m = await db.get("SELECT brand_id, branch_id, sender_role, resolved_at, created_at FROM branch_messages WHERE id = $1", [ticketId]) as any;
       if (!m || m.sender_role !== 'Restaurants') return null;
-      return { open: m.resolved_at == null, brand_id: m.brand_id ?? null, branch_id: m.branch_id ?? null, data: null };
+      // Open only while unresolved, unanswered (no office reply after it) and un-liked
+      // — same rule as the ticket list, so a replied/liked ticket stops being claimable
+      // and any hold on it is treated as stale (see the auto-release in claim).
+      const answered = await db.get("SELECT 1 FROM branch_messages o WHERE o.branch_id = $1 AND o.sender_role <> 'Restaurants' AND o.created_at > $2 LIMIT 1", [m.branch_id, m.created_at]);
+      const liked = await db.get("SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = $1 LIMIT 1", [ticketId]);
+      const open = m.resolved_at == null && !answered && !liked;
+      return { open, brand_id: m.brand_id ?? null, branch_id: m.branch_id ?? null, data: null };
     }
     const r = await db.get("SELECT status, data FROM pending_requests WHERE id = $1 AND type = $2", [ticketId, ticketType]) as any;
     if (!r) return null;
@@ -3881,8 +3887,16 @@ async function startServer() {
     const ticket_id = Number(req.body.ticket_id);
     if (!TICKET_TYPES.includes(ticket_type) || !Number.isFinite(ticket_id)) return res.status(400).json({ error: "Invalid ticket" });
     try {
-      const busy = await db.get("SELECT 1 FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1", [user.id]);
-      if (busy) return res.status(409).json({ error: "Finish or transfer your current ticket first" });
+      // Block only if the agent already holds a ticket that's STILL open. If their
+      // held ticket was resolved elsewhere (e.g. replied on the chat page, so the
+      // assignment was left stuck in_progress), auto-release it so they're never
+      // blocked and can pick again.
+      const held = await db.get("SELECT id, ticket_type, ticket_id FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1", [user.id]) as any;
+      if (held) {
+        const heldMeta = await getTicketMeta(held.ticket_type, held.ticket_id);
+        if (heldMeta && heldMeta.open) return res.status(409).json({ error: "Finish or transfer your current ticket first" });
+        await db.query("UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP WHERE id = $1", [held.id]);
+      }
       const meta = await getTicketMeta(ticket_type, ticket_id);
       if (!meta) return res.status(404).json({ error: "Ticket not found" });
       if (!meta.open) return res.status(409).json({ error: "Ticket is no longer available" });

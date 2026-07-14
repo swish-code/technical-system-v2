@@ -683,23 +683,17 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     {renderTicketControls('chat', t.id, t.brand_id, t.branch_id)}
                   </div>
                 )}
-                {/* Inline reply — sends a real chat message; the ticket clears once answered */}
+                {/* Reply box — its text is sent when the holder clicks "Send & Done".
+                    There is NO standalone Send: replying without closing used to leave
+                    the agent's assignment stuck in_progress (couldn't pick again). */}
                 <div className="flex items-center gap-2">
                   <input
                     value={replyDrafts[t.id] || ''}
                     onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendReply(t); } }}
-                    placeholder={lang === 'en' ? 'Type a reply…' : 'اكتب ردًا…'}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && isMine('chat', t.id)) { e.preventDefault(); doneTicket('chat', t.id, t.branch_id); } }}
+                    placeholder={lang === 'en' ? 'Type a reply, then press Send & Done…' : 'اكتب ردًا ثم اضغط إرسال وإنهاء…'}
                     className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white"
                   />
-                  <button
-                    onClick={() => sendReply(t)}
-                    disabled={sendingReplyId === t.id || !(replyDrafts[t.id] || '').trim()}
-                    className="shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl bg-brand text-white font-bold text-sm hover:opacity-90 transition-all active:scale-95 disabled:opacity-50"
-                  >
-                    {sendingReplyId === t.id ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
-                    {lang === 'en' ? 'Send' : 'إرسال'}
-                  </button>
                 </div>
               </div>
             ))}
