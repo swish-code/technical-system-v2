@@ -3784,11 +3784,42 @@ async function startServer() {
     }
   };
 
+  // Classic Approve/Reject close the request, so any ticket-workflow hold on it
+  // must be settled too (same principle as the chat-reply sync): the approver's
+  // OWN hold becomes done + a logged task; anyone else's hold is released —
+  // otherwise it stays "in progress" forever with no credit (seen in prod:
+  // request approved from the details modal while another agent held it).
+  const settleAssignmentsOnProcess = async (request: any, processorUserId: number, processorName: string, credit: boolean) => {
+    try {
+      if (credit) {
+        const won = await db.get(`
+          UPDATE ticket_assignments SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
+            duration_seconds = GREATEST(1, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int)
+          WHERE ticket_type = $2 AND ticket_id = $3 AND status = 'in_progress' AND assigned_to = $1
+          RETURNING id, duration_seconds, brand_id`, [processorUserId, request.type, request.id]) as any;
+        if (won) {
+          let data: any = {}; try { data = JSON.parse(request.data); } catch {}
+          const ins = await db.query(`
+            INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
+            VALUES ('technical', 'Technical', $1, 'Completed', $2, $3, $4, $5, $6) RETURNING id`,
+            [ticketActivity(request.type, data), Math.max(1, Number(won.duration_seconds) || 1), won.brand_id,
+             `Ticket #${request.id} (${request.type})`, processorUserId, processorName]);
+          await db.query("UPDATE ticket_assignments SET task_log_id = $1 WHERE id = $2", [ins.rows[0].id, won.id]);
+        }
+      }
+      const released = await db.query(`
+        UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP
+        WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'`, [request.type, request.id]);
+      if ((released.rowCount || 0) > 0 || credit) broadcast({ type: "TICKETS_UPDATED" });
+    } catch (e) { console.error("settleAssignmentsOnProcess failed", e); }
+  };
+
   app.post("/api/pending-requests/:id/approve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
     const request = await db.get("SELECT * FROM pending_requests WHERE id = $1", [req.params.id]) as any;
     if (!request || request.status !== 'Pending') return res.status(400).json({ error: "Invalid request" });
     try {
       await applyPendingRequest(request, (req as any).user.id);
+      await settleAssignmentsOnProcess(request, (req as any).user.id, (req as any).user.username, true);
       res.json({ success: true });
     } catch (error) {
       console.error("Error approving request:", error);
@@ -3815,7 +3846,9 @@ async function startServer() {
       });
     }
     await db.query("UPDATE pending_requests SET status = 'Rejected', processed_by = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [(req as any).user.id, id]);
-      
+    // A rejected request is closed — release any workflow hold on it (no credit).
+    if (request) await settleAssignmentsOnProcess(request, (req as any).user.id, (req as any).user.username, false);
+
     broadcast({ type: "PENDING_REQUEST_UPDATED" });
     broadcast({
       type: "NOTIFICATION",
