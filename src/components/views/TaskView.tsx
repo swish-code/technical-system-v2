@@ -46,6 +46,7 @@ export default function TaskView() {
   const [newStatusCounts, setNewStatusCounts] = useState(false);
   const [agents, setAgents] = useState<any[]>([]);
   const [agentId, setAgentId] = useState('');
+  const [handoffs, setHandoffs] = useState<{ transfers: any[]; releases: any[] }>({ transfers: [], releases: [] });
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -64,13 +65,16 @@ export default function TaskView() {
   const fetchAgents = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/agents`); if (r.ok) setAgents(await r.json()); } catch { /* ignore */ }
   };
+  const fetchHandoffs = async () => {
+    try { const r = await fetchWithAuth(`${API_URL}/task-logs/handoffs?date=${date}`); if (r.ok) { const d = await r.json(); setHandoffs({ transfers: d.transfers || [], releases: d.releases || [] }); } } catch { /* ignore */ }
+  };
   const fetchSummary = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
 
   useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); }, []);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
-  useEffect(() => { fetchSummary(); }, [date]);
+  useEffect(() => { fetchSummary(); fetchHandoffs(); }, [date]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
   const canSave = !!activityType && !!status && minutes > 0 && !saving;
@@ -97,6 +101,7 @@ export default function TaskView() {
 
   const fmtDur = (s: number) => { const m = Math.round((Number(s) || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
   const hours = (s: any) => ((Number(s) || 0) / 3600).toFixed(1);
+  const ticketLabel = (t: string) => t === 'chat' ? (ar ? 'مراسلة فاتورة' : 'Invoice Chat') : t === 'busy_branch' ? (ar ? 'فرع مزدحم' : 'Busy Branch') : (ar ? 'إخفاء/إظهار' : 'Hide/Unhide');
 
   const addActivity = async () => { if (!newActivity.trim()) return; await fetchWithAuth(`${API_URL}/task-config/activity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newActivity.trim() }) }); setNewActivity(''); fetchConfig(); };
   const delActivity = async (id: number) => { await fetchWithAuth(`${API_URL}/task-config/activity/${id}`, { method: 'DELETE' }); fetchConfig(); };
@@ -264,6 +269,48 @@ export default function TaskView() {
           </div>
         </div>
       )}
+
+      {/* Transfers & Releases the agent performed */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-black uppercase tracking-widest text-zinc-500">{ar ? 'التحويلات (Transfer)' : 'Transfers'}</h3>
+            <span className="min-w-6 h-6 px-2 rounded-full bg-brand/10 text-brand text-xs font-black flex items-center justify-center">{handoffs.transfers.length}</span>
+          </div>
+          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            {handoffs.transfers.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد تحويلات في هذا اليوم' : 'No transfers this day'}</p>}
+            {handoffs.transfers.map((h: any) => (
+              <div key={h.id} className="flex items-center justify-between gap-2 text-sm border-b border-zinc-50 dark:border-zinc-800 py-1.5">
+                <span className="font-bold text-zinc-700 dark:text-zinc-300 truncate min-w-0">
+                  {ticketLabel(h.ticket_type)}{h.brand_name ? ` · ${h.brand_name}` : ''}
+                  {isAdmin && h.by_name && <span className="text-zinc-400"> · {h.by_name}</span>}
+                  <span className="text-zinc-400"> → </span>
+                  <span className="text-brand font-black">{h.to_name || '—'}</span>
+                </span>
+                <span className="shrink-0 text-zinc-400 font-bold text-xs whitespace-nowrap">{formatDate(h.done_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-5">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-black uppercase tracking-widest text-zinc-500">{ar ? 'الإرجاعات (Release)' : 'Releases'}</h3>
+            <span className="min-w-6 h-6 px-2 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 text-xs font-black flex items-center justify-center">{handoffs.releases.length}</span>
+          </div>
+          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            {handoffs.releases.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد إرجاعات في هذا اليوم' : 'No releases this day'}</p>}
+            {handoffs.releases.map((h: any) => (
+              <div key={h.id} className="flex items-center justify-between gap-2 text-sm border-b border-zinc-50 dark:border-zinc-800 py-1.5">
+                <span className="font-bold text-zinc-700 dark:text-zinc-300 truncate min-w-0">
+                  {ticketLabel(h.ticket_type)}{h.brand_name ? ` · ${h.brand_name}` : ''}
+                  {isAdmin && h.by_name && <span className="text-zinc-400"> · {h.by_name}</span>}
+                </span>
+                <span className="shrink-0 text-zinc-400 font-bold text-xs whitespace-nowrap">{formatDate(h.done_at)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
       </div>
       )}
 

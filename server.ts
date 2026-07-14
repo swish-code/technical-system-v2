@@ -3282,6 +3282,35 @@ async function startServer() {
     res.json(rows);
   });
 
+  // Transfers & releases the agent performed (Overview handoffs panel). Non-admins
+  // see their own; admins see everyone (or one agent via ?agent_id). For a transfer,
+  // to_name = the next holder of the same ticket right after this row was handed off.
+  app.get("/api/task-logs/handoffs", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const conds: string[] = ["ta.status IN ('transferred','released')"];
+    const params: any[] = [];
+    if (!isAdmin) { params.push(user.id); conds.push(`ta.assigned_to = $${params.length}`); }
+    else if (req.query.agent_id) { params.push(Number(req.query.agent_id)); conds.push(`ta.assigned_to = $${params.length}`); }
+    if (req.query.date) { params.push(req.query.date); conds.push(`(ta.done_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length}`); }
+    const rows = await db.all(`
+      SELECT ta.id, ta.ticket_type, ta.ticket_id, ta.status, ta.done_at,
+        u.username AS by_name, b.name AS brand_name,
+        (SELECT u2.username FROM ticket_assignments n JOIN users u2 ON u2.id = n.assigned_to
+         WHERE n.ticket_type = ta.ticket_type AND n.ticket_id = ta.ticket_id
+           AND n.id <> ta.id AND n.assigned_at >= ta.done_at
+         ORDER BY n.assigned_at ASC LIMIT 1) AS to_name
+      FROM ticket_assignments ta
+      JOIN users u ON u.id = ta.assigned_to
+      LEFT JOIN brands b ON b.id = ta.brand_id
+      WHERE ${conds.join(' AND ')}
+      ORDER BY ta.done_at DESC LIMIT 200`, params);
+    res.json({
+      transfers: rows.filter((r: any) => r.status === 'transferred'),
+      releases: rows.filter((r: any) => r.status === 'released'),
+    });
+  });
+
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
     const name = (req.body.name || '').trim();
