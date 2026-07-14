@@ -8267,6 +8267,41 @@ async function startServer() {
     res.json(rows);
   });
 
+  // On-demand ticket context: the last N messages of a branch's chat thread
+  // (both store + office), so an agent can click "History" on an ambiguous
+  // ticket (e.g. "please follow up") and see what the store means — without
+  // leaving the Requests tab. Read-only, office-only, brand-scoped, capped.
+  app.get("/api/branch-chat/:branchId/recent", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
+    try {
+      const branchId = Number(req.params.branchId);
+      if (!Number.isFinite(branchId)) return res.status(400).json({ error: "Invalid branch" });
+      const limit = Math.min(20, Math.max(1, Number(req.query.limit) || 5));
+      const branch = await db.get("SELECT id, brand_id FROM branches WHERE id = $1", [branchId]) as any;
+      if (!branch) return res.status(404).json({ error: "Branch not found" });
+      // Brand-restricted office users can only see their own brands.
+      const allowed = await getAllowedBrandIds((req as any).user);
+      if (allowed !== null && !allowed.includes(branch.brand_id)) return res.status(403).json({ error: "Not allowed for this brand" });
+
+      const rows = await db.all(`
+        SELECT bm.id, bm.sender_role, bm.comment, bm.image_url, bm.created_at, bm.reply_to_id,
+          u.username,
+          rm.comment AS reply_comment, rm.image_url AS reply_image_url, ru.username AS reply_username
+        FROM branch_messages bm
+        JOIN users u ON u.id = bm.sender_id
+        LEFT JOIN branch_messages rm ON rm.id = bm.reply_to_id
+        LEFT JOIN users ru ON ru.id = rm.sender_id
+        WHERE bm.branch_id = $1
+        ORDER BY bm.created_at DESC
+        LIMIT $2
+      `, [branchId, limit]);
+      // Return oldest→newest so the UI can render the thread top-to-bottom.
+      res.json(rows.reverse());
+    } catch (e) {
+      console.error("branch-chat recent error:", e);
+      res.status(500).json({ error: "Failed to load history" });
+    }
+  });
+
   // Office dismisses a restaurant message (clears the ticket without replying).
   app.post("/api/branch-chat/:id/resolve", authenticate, authorize(CHAT_OFFICE_ROLES), async (req, res) => {
     const user = (req as any).user;

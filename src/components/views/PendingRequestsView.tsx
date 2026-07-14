@@ -80,6 +80,21 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   // Which ticket key currently has its transfer/reassign picker open.
   const [transferOpenKey, setTransferOpenKey] = useState<string | null>(null);
   const [ticketBusyKey, setTicketBusyKey] = useState<string | null>(null);
+  // On-demand "History" for a chat ticket: the last few messages of the thread.
+  const [historyKey, setHistoryKey] = useState<number | null>(null);
+  const [historyMsgs, setHistoryMsgs] = useState<any[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  const toggleHistory = async (ticketId: number, branchId: number) => {
+    if (historyKey === ticketId) { setHistoryKey(null); return; }
+    setHistoryKey(ticketId);
+    setHistoryMsgs([]);
+    setHistoryLoading(true);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/branch-chat/${branchId}/recent?limit=5`);
+      if (res.ok) setHistoryMsgs((await safeJson(res)) || []);
+    } catch { /* ignore */ } finally { setHistoryLoading(false); }
+  };
 
   const keyOf = (type: string, id: number) => `${type}:${id}`;
   const holderOf = (type: string, id: number): TicketHolder | undefined => ticketActive[keyOf(type, id)];
@@ -669,6 +684,14 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                   </div>
                   <div className="shrink-0 flex items-center gap-2">
                     <button
+                      onClick={() => toggleHistory(t.id, t.branch_id)}
+                      className={cn("flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-sm transition-all active:scale-95",
+                        historyKey === t.id ? "bg-brand/10 text-brand" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 hover:bg-zinc-200 dark:hover:bg-zinc-700")}
+                    >
+                      <Clock size={16} />
+                      {lang === 'en' ? 'History' : 'السجل'}
+                    </button>
+                    <button
                       onClick={() => openChat(t.branch_id)}
                       className="flex items-center gap-2 px-4 py-2 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 rounded-xl font-bold text-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all active:scale-95"
                     >
@@ -677,6 +700,41 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     </button>
                   </div>
                 </div>
+                {/* On-demand history: last few messages of this branch's thread. */}
+                {historyKey === t.id && (
+                  <div className="rounded-xl border border-zinc-100 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-800/30 p-3 space-y-2">
+                    {historyLoading ? (
+                      <div className="flex items-center justify-center gap-2 py-3 text-zinc-400 text-xs font-bold uppercase tracking-widest">
+                        <Loader2 size={14} className="animate-spin" /> {lang === 'en' ? 'Loading…' : 'جارٍ التحميل…'}
+                      </div>
+                    ) : historyMsgs.length === 0 ? (
+                      <p className="py-2 text-center text-zinc-400 text-xs font-bold">{lang === 'en' ? 'No earlier messages' : 'لا توجد رسائل سابقة'}</p>
+                    ) : historyMsgs.map((m) => {
+                      const fromStore = m.sender_role === 'Restaurants';
+                      return (
+                        <div key={m.id} className={cn("flex flex-col", fromStore ? "items-start" : "items-end")}>
+                          <div className={cn("max-w-[80%] rounded-2xl px-3 py-2 text-sm",
+                            fromStore ? "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700" : "bg-brand/10 text-zinc-900 dark:text-white")}>
+                            <div className="flex items-center gap-2 mb-0.5">
+                              <span className="text-[10px] font-black uppercase tracking-widest text-zinc-400">{fromStore ? m.username : m.username}</span>
+                              <span className="text-[10px] text-zinc-400">{formatDate(m.created_at)}</span>
+                            </div>
+                            {m.reply_to_id && (
+                              <div className="mb-1 pl-2 border-l-2 border-brand/40 text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                                <span className="font-bold">{m.reply_username}: </span>
+                                {m.reply_comment || (m.reply_image_url ? '📷' : '')}
+                              </div>
+                            )}
+                            {m.comment && <span className="text-zinc-800 dark:text-zinc-100 break-words">{m.comment}</span>}
+                            {m.image_url && (
+                              <img src={m.image_url} alt="msg" className="mt-1 w-16 h-16 rounded-lg object-cover cursor-zoom-in" onClick={() => window.open(m.image_url, '_blank')} />
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {/* Ticket workflow — pick, reply, mark done */}
                 {user?.role_name !== 'Restaurants' && (
                   <div className="flex flex-wrap items-center gap-2">
