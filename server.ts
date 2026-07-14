@@ -2884,7 +2884,7 @@ async function startServer() {
 
   // Cookie options shared by /api/login (set) and /api/logout (clear).
   const AUTH_COOKIE_NAME = "swish_token";
-  const AUTH_COOKIE_MAX_AGE_MS = 8 * 60 * 60 * 1000; // 8h, matches JWT expiresIn.
+  const AUTH_COOKIE_MAX_AGE_MS = 400 * 24 * 60 * 60 * 1000; // 400d — effectively never logs out (browsers cap cookies at ~400d). Matches JWT expiresIn.
   const isProd = process.env.NODE_ENV === "production";
   const authCookieOptions = {
     httpOnly: true,
@@ -4613,7 +4613,7 @@ async function startServer() {
         branch_ids: branchIds
       };
       
-      const token = jwt.sign(userData, JWT_SECRET, { expiresIn: "8h", algorithm: "HS256" });
+      const token = jwt.sign(userData, JWT_SECRET, { expiresIn: "400d", algorithm: "HS256" });
       // Set the JWT as an httpOnly cookie. Token is NOT echoed in the response
       // body, so XSS can't read it from localStorage like in v1 (S-13/S-14).
       res.cookie(AUTH_COOKIE_NAME, token, authCookieOptions);
