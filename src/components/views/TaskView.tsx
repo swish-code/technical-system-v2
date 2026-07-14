@@ -32,7 +32,7 @@ export default function TaskView() {
   const [date, setDate] = useState(today);
   const [logs, setLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
-  const [showConfig, setShowConfig] = useState(false);
+  const [tab, setTab] = useState<'new' | 'dash' | 'config'>('new');
 
   // Config editing
   const [newActivity, setNewActivity] = useState('');
@@ -99,21 +99,22 @@ export default function TaskView() {
         </div>
       )}
 
-      <div className="flex items-center justify-between gap-4 flex-wrap">
-        <div>
-          <h1 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
-            <ListChecks className="text-brand" size={26} /> {ar ? 'المهام' : 'Task'}
-          </h1>
-          <p className="text-zinc-500 font-medium text-sm mt-0.5">{ar ? 'سجّل مهامك التقنية وتتبّع وقتك وإنتاجيتك' : 'Log technical tasks and track time & productivity'}</p>
-        </div>
-        {isAdmin && (
-          <button onClick={() => setShowConfig((v) => !v)} className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 text-xs font-black uppercase tracking-widest hover:text-brand transition">
-            <Settings size={16} /> {ar ? 'الإعدادات' : 'Configuration'}
-          </button>
-        )}
+      <div>
+        <h1 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
+          <ListChecks className="text-brand" size={26} /> {ar ? 'المهام' : 'Task'}
+        </h1>
+        <p className="text-zinc-500 font-medium text-sm mt-0.5">{ar ? 'سجّل مهامك التقنية وتتبّع وقتك وإنتاجيتك' : 'Log technical tasks and track time & productivity'}</p>
+      </div>
+
+      {/* Sub-tabs — each section shows on its own; the form hides when you switch away */}
+      <div className="flex gap-1 p-1 bg-zinc-100 dark:bg-zinc-800/60 rounded-2xl w-full sm:w-fit overflow-x-auto">
+        <TabButton active={tab === 'new'} onClick={() => setTab('new')} icon={<Plus size={16} />}>{ar ? 'مهمة جديدة' : 'New Log'}</TabButton>
+        <TabButton active={tab === 'dash'} onClick={() => setTab('dash')} icon={<Gauge size={16} />}>{ar ? 'الملخص والسجلات' : 'Overview & Logs'}</TabButton>
+        {isAdmin && <TabButton active={tab === 'config'} onClick={() => setTab('config')} icon={<Settings size={16} />}>{ar ? 'الإعدادات' : 'Configuration'}</TabButton>}
       </div>
 
       {/* ===== Section 1: New Technical Log ===== */}
+      {tab === 'new' && (
       <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-6 md:p-9 shadow-sm">
         <div className="flex items-start gap-3 mb-7">
           <ClipboardList className="text-brand mt-0.5 shrink-0" size={26} />
@@ -186,8 +187,11 @@ export default function TaskView() {
           {ar ? 'حفظ السجل' : 'Save Log'}
         </button>
       </div>
+      )}
 
-      {/* ===== Section 2: Stats / Dashboard ===== */}
+      {/* ===== Section 2 & 3: Overview + Logs (own tab) ===== */}
+      {tab === 'dash' && (
+      <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <h2 className="font-black text-zinc-900 dark:text-white flex items-center gap-2"><Gauge className="text-brand" size={18} /> {ar ? 'ملخص اليوم' : 'Overview'}</h2>
         <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
@@ -278,9 +282,11 @@ export default function TaskView() {
           </table>
         </div>
       </div>
+      </div>
+      )}
 
-      {/* ===== Section 4: Configuration (admins) ===== */}
-      {isAdmin && showConfig && (
+      {/* ===== Section 4: Configuration (admins, own tab) ===== */}
+      {tab === 'config' && isAdmin && (
         <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-brand/30 p-6 space-y-6">
           <h2 className="font-black text-zinc-900 dark:text-white flex items-center gap-2"><Settings className="text-brand" size={18} /> {ar ? 'إعدادات القوائم' : 'Configuration'}</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -324,6 +330,16 @@ export default function TaskView() {
         </div>
       )}
     </div>
+  );
+}
+
+function TabButton({ active, onClick, icon, children }: { active: boolean; onClick: () => void; icon: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick}
+      className={cn("inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-black whitespace-nowrap transition-all",
+        active ? "bg-white dark:bg-zinc-900 text-brand shadow-sm" : "text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200")}>
+      {icon} {children}
+    </button>
   );
 }
 
