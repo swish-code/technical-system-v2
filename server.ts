@@ -3728,10 +3728,13 @@ async function startServer() {
             console.error("Error calculating duration", e);
           }
 
+          // Only close a record that is still open. If it was already reopened
+          // (e.g. handled elsewhere before this reopen ticket was completed),
+          // skip so we never overwrite the real end_time and inflate duration.
           await db.query(`
-            UPDATE busy_period_records 
+            UPDATE busy_period_records
             SET end_time = $1, total_duration = $2, total_duration_minutes = $3
-            WHERE id = $4
+            WHERE id = $4 AND (end_time IS NULL OR end_time = '')
           `, [end_time, total_duration, total_duration_minutes, data.id]);
 
           await logAction(processorUserId, "BUSY_UPDATE", "busy_period_records", Number(data.id), null, {
@@ -7198,6 +7201,36 @@ async function startServer() {
             data: { type: "BUSY_TIMER", recordId: record.id, url: "/" },
           }
         );
+
+        // Turn the expiry into a COUNTED task: create an "Open Branch" reopen
+        // request (identical shape to a restaurant-submitted OPEN request) so an
+        // agent picks it, reopens the store, and gets credited via the ticket
+        // workflow — instead of just an alarm nobody is accountable for.
+        // Deduped per branch (advisory lock) so we never stack two pending
+        // reopen requests for the same branch. Best-effort: a failure here must
+        // not stop the alarm loop, so it's wrapped and swallowed.
+        try {
+          let created = false;
+          await db.transaction(async (client) => {
+            await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`busy_branch_open_${String(record.branch).trim().toUpperCase()}`]);
+            const existing = await client.query(`
+              SELECT id FROM pending_requests
+              WHERE type = 'busy_branch' AND status = 'Pending'
+                AND UPPER(data::jsonb->>'action') = 'OPEN'
+                AND TRIM(UPPER(data::jsonb->>'branch')) = TRIM(UPPER($1))
+            `, [record.branch]);
+            if (existing.rows.length === 0) {
+              await client.query(`
+                INSERT INTO pending_requests (user_id, type, data, status)
+                VALUES ($1, $2, $3, $4)
+              `, [record.user_id, 'busy_branch', JSON.stringify({ ...record, action: 'OPEN', auto_reopen: true }), 'Pending']);
+              created = true;
+            }
+          });
+          if (created) broadcast({ type: "PENDING_REQUEST_UPDATED" });
+        } catch (reopenErr) {
+          console.error(`[Timer] Failed to create reopen request for record ${record.id}:`, reopenErr);
+        }
       }
     } catch (err) {
       console.error("[Timer] Error in background checker:", err);

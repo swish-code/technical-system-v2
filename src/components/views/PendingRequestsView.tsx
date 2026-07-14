@@ -822,6 +822,14 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                               : (lang === 'en' ? 'Busy Branch Request' : 'طلب فرع مزدحم')
                           )}
                         </span>
+                        {request.data?.auto_reopen && (
+                          <>
+                            <div className="w-1 h-1 rounded-full bg-zinc-300" />
+                            <span className="text-[10px] font-black uppercase tracking-widest text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-900/20 px-2 py-0.5 rounded-full border border-rose-100 dark:border-rose-800">
+                              {lang === 'en' ? '⏱ Auto Reopen' : '⏱ إعادة فتح تلقائي'}
+                            </span>
+                          </>
+                        )}
                         <div className="w-1 h-1 rounded-full bg-zinc-300" />
                         <span className="text-xs font-bold text-zinc-500">{formatDate(request.created_at)}</span>
                       </div>
