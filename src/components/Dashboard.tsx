@@ -47,7 +47,8 @@ import TechnicalKPIView from './views/TechnicalKPIView';
 import LateOrdersView from './views/LateOrdersView';
 import BranchChatView from './views/BranchChatView';
 import OrdersView from './views/OrdersView';
-import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert, MessageSquare, Gauge } from 'lucide-react';
+import TaskView from './views/TaskView';
+import { BarChart3, Activity, Inbox, Bell, Volume2, ShieldAlert, MessageSquare, Gauge, ListChecks } from 'lucide-react';
 import { useWebSocket } from '../hooks/useWebSocket';
 import NotificationManager from './NotificationManager';
 import { subscribeToPush } from '../lib/notificationHelper';
@@ -240,6 +241,7 @@ export default function Dashboard() {
       callCenterConfig: "Call Center Config",
       requestsBranch: "Requests Branch",
       orders: "Orders",
+      task: "Task",
     },
     ar: {
       dashboard: "لوحة التحكم",
@@ -264,6 +266,7 @@ export default function Dashboard() {
       callCenterConfig: "إعدادات مركز الاتصال",
       requestsBranch: "طلبات الفروع",
       orders: "الطلبات",
+      task: "المهام",
     }
   }[lang];
 
@@ -279,6 +282,7 @@ export default function Dashboard() {
     { id: 'busy_periods', label: t.busyPeriods, icon: AlertCircle, roles: ["Technical Back Office", "Manager", "Restaurants", "Super Visor", "Call Center", "Complain Team", "Area Manager", "Operation Manager"] },
     { id: 'requests_branch', label: t.requestsBranch, icon: Inbox, roles: ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'orders', label: t.orders, icon: FileText, roles: ["Restaurants"] },
+    { id: 'task', label: t.task, icon: ListChecks, roles: ["Technical Team", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"] },
     { id: 'busy_config', label: t.busyConfig, icon: Settings, roles: ["Manager", "Operation Manager"] },
     { id: 'call_center_config', label: t.callCenterConfig, icon: Settings, roles: ["Manager", "Super Visor", "Operation Manager"] },
     { id: 'logs', label: t.logs, icon: History, roles: ["Manager", "Super Visor", "Operation Manager"] },
@@ -372,6 +376,9 @@ export default function Dashboard() {
     }
     if (activeTab === 'orders') {
       return <OrdersView />;
+    }
+    if (activeTab === 'task') {
+      return <TaskView />;
     }
     if (user?.role_name === 'Manager' || user?.role_name === 'Super Visor' || user?.role_name === 'Technical Back Office' || user?.role_name === 'Operation Manager') {
       return <ManagerView activeTab={activeTab} />;

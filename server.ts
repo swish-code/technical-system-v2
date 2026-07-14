@@ -918,6 +918,36 @@ async function initDb() {
     PRIMARY KEY (user_id, branch_id)
   );
 
+  -- ===== Technical Task Log (self-contained feature; the "Task" page) =====
+  -- One row per logged technical task. Independent of every other table.
+  CREATE TABLE IF NOT EXISTS activity_logs (
+    id SERIAL PRIMARY KEY,
+    log_type TEXT NOT NULL DEFAULT 'technical',
+    department TEXT NOT NULL DEFAULT 'Technical',
+    activity_type TEXT NOT NULL,
+    status TEXT NOT NULL,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    brand_id INTEGER,
+    notes TEXT,
+    agent_id INTEGER NOT NULL,
+    agent_name TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_activity_logs_agent ON activity_logs(agent_id, created_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at DESC);
+  -- Customizable dropdown lists for the Task page (edited in its Config section).
+  CREATE TABLE IF NOT EXISTS tech_activity (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    sort_order INTEGER DEFAULT 0
+  );
+  CREATE TABLE IF NOT EXISTS cc_status (
+    id SERIAL PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    counts_time BOOLEAN DEFAULT false,
+    sort_order INTEGER DEFAULT 0
+  );
+
   -- Group chat (admin-created, member-scoped, multi-user) — separate from the
   -- branch chat model. chat_group_members controls who can see/use a group.
   CREATE TABLE IF NOT EXISTS chat_groups (
@@ -1128,6 +1158,22 @@ try {
     if (!exists) {
       await db.query("INSERT INTO roles (name) VALUES ($1)", [roleName]);
     }
+  }
+
+  // Seed the Task page's dropdown lists (only if a value doesn't already exist;
+  // fully editable later from the Task page's Configuration section).
+  const techActivities = [
+    "Delayed Orders Follow-up", "Aggregator Follow-up", "Missing Item Cases", "Wrong Dispatch Cases",
+    "Big Order Confirmation", "Order Assignment", "Aggregator Comments", "Punch Orders",
+    "Open Branch", "Busy Branch", "Close Branch", "Hide Item", "Unhide Item",
+    "Follow-up Groups", "Cancellation Request", "Foodics / POS Issues", "Other",
+  ];
+  for (let i = 0; i < techActivities.length; i++) {
+    await db.query("INSERT INTO tech_activity (name, sort_order) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", [techActivities[i], i]);
+  }
+  const taskStatuses: Array<[string, boolean]> = [["Open", false], ["In Progress", false], ["Completed", true]];
+  for (let i = 0; i < taskStatuses.length; i++) {
+    await db.query("INSERT INTO cc_status (name, counts_time, sort_order) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING", [taskStatuses[i][0], taskStatuses[i][1], i]);
   }
 
   // v2: removed hardcoded "Super Visor" / "supervisor123" seed. Create via bootstrap SQL.
@@ -3125,6 +3171,103 @@ async function startServer() {
     }
     next();
   };
+
+  // ===================== Technical Task Log ("Task" page) =====================
+  // Self-contained: its own table (activity_logs) + config lists. Touches nothing else.
+  const TASK_ROLES = ["Technical Team", "Technical Back Office", "Manager", "Super Visor", "Operation Manager"];
+  const TASK_ADMIN_ROLES = ["Manager", "Super Visor", "Operation Manager"];
+
+  // Dropdown lists for the form (activities + statuses).
+  app.get("/api/task-config", authenticate, authorize(TASK_ROLES), async (_req, res) => {
+    const activities = await db.all("SELECT id, name FROM tech_activity ORDER BY sort_order, name");
+    const statuses = await db.all("SELECT id, name, counts_time FROM cc_status ORDER BY sort_order, id");
+    res.json({ activities, statuses });
+  });
+
+  // Create one technical-task log. Date + agent are set automatically here.
+  app.post("/api/task-logs", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const activity_type = (req.body.activity_type || '').trim();
+    const status = (req.body.status || '').trim();
+    const durationSeconds = Math.round(Number(req.body.duration_seconds));
+    const brand_id = req.body.brand_id ? Number(req.body.brand_id) : null;
+    const notes = (req.body.notes || '').trim() || null;
+    if (!activity_type || !status) return res.status(400).json({ error: "Task type and status are required" });
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return res.status(400).json({ error: "Time spent must be greater than 0" });
+    const ins = await db.query(
+      `INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
+       VALUES ('technical', 'Technical', $1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [activity_type, status, durationSeconds, brand_id, notes, user.id, user.username]
+    );
+    res.json({ id: ins.rows[0].id, success: true });
+  });
+
+  // Reused filter builder: non-admins only ever see their own logs.
+  const taskFilters = (req: any) => {
+    const user = req.user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const conds: string[] = [];
+    const params: any[] = [];
+    if (!isAdmin) { params.push(user.id); conds.push(`al.agent_id = $${params.length}`); }
+    else if (req.query.agent_id) { params.push(Number(req.query.agent_id)); conds.push(`al.agent_id = $${params.length}`); }
+    if (req.query.status) { params.push(req.query.status); conds.push(`al.status = $${params.length}`); }
+    if (req.query.activity_type) { params.push(req.query.activity_type); conds.push(`al.activity_type = $${params.length}`); }
+    if (req.query.date) { params.push(req.query.date); conds.push(`(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length}`); }
+    return { isAdmin, where: conds.length ? `WHERE ${conds.join(' AND ')}` : '', params };
+  };
+
+  // List logs (All / Team Logs section).
+  app.get("/api/task-logs", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const { where, params } = taskFilters(req);
+    const rows = await db.all(
+      `SELECT al.id, al.activity_type, al.status, al.duration_seconds, al.notes, al.agent_name, al.created_at, b.name AS brand_name
+       FROM activity_logs al LEFT JOIN brands b ON al.brand_id = b.id
+       ${where} ORDER BY al.created_at DESC LIMIT 500`, params);
+    res.json(rows);
+  });
+
+  // Dashboard aggregates: totals, productive time (counts_time statuses only),
+  // tasks-by-status, tasks-by-activity, and per-agent (admins).
+  app.get("/api/task-logs/summary", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const { isAdmin, where, params } = taskFilters(req);
+    const totals = await db.get(`
+      SELECT COUNT(*)::int AS total_tasks,
+        COALESCE(SUM(al.duration_seconds) FILTER (WHERE cs.counts_time), 0)::bigint AS productive_seconds,
+        COALESCE(SUM(al.duration_seconds), 0)::bigint AS total_seconds
+      FROM activity_logs al LEFT JOIN cc_status cs ON cs.name = al.status ${where}`, params);
+    const byStatus = await db.all(`SELECT al.status, COUNT(*)::int AS count FROM activity_logs al ${where} GROUP BY al.status ORDER BY count DESC`, params);
+    const byActivity = await db.all(`SELECT al.activity_type, COUNT(*)::int AS count, COALESCE(SUM(al.duration_seconds),0)::bigint AS seconds FROM activity_logs al ${where} GROUP BY al.activity_type ORDER BY count DESC`, params);
+    const byAgent = isAdmin ? await db.all(`
+      SELECT al.agent_name, COUNT(*)::int AS tasks,
+        COALESCE(SUM(al.duration_seconds) FILTER (WHERE cs.counts_time),0)::bigint AS productive_seconds
+      FROM activity_logs al LEFT JOIN cc_status cs ON cs.name = al.status ${where}
+      GROUP BY al.agent_name ORDER BY productive_seconds DESC`, params) : [];
+    res.json({ totals, byStatus, byActivity, byAgent });
+  });
+
+  // Config editing (managers only) — add/remove activities and statuses.
+  app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
+    const name = (req.body.name || '').trim();
+    if (!name) return res.status(400).json({ error: "Name required" });
+    await db.query("INSERT INTO tech_activity (name, sort_order) VALUES ($1, (SELECT COALESCE(MAX(sort_order),0)+1 FROM tech_activity)) ON CONFLICT (name) DO NOTHING", [name]);
+    res.json({ success: true });
+  });
+  app.delete("/api/task-config/activity/:id", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
+    await db.query("DELETE FROM tech_activity WHERE id = $1", [Number(req.params.id)]);
+    res.json({ success: true });
+  });
+  app.post("/api/task-config/status", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
+    const name = (req.body.name || '').trim();
+    const counts_time = !!req.body.counts_time;
+    if (!name) return res.status(400).json({ error: "Name required" });
+    await db.query("INSERT INTO cc_status (name, counts_time, sort_order) VALUES ($1, $2, (SELECT COALESCE(MAX(sort_order),0)+1 FROM cc_status)) ON CONFLICT (name) DO NOTHING", [name, counts_time]);
+    res.json({ success: true });
+  });
+  app.delete("/api/task-config/status/:id", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
+    await db.query("DELETE FROM cc_status WHERE id = $1", [Number(req.params.id)]);
+    res.json({ success: true });
+  });
+  // =================== end Technical Task Log ===================
 
   // Pending Requests API
   app.get("/api/pending-requests", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Restaurants", "Operation Manager"]), async (req, res) => {
