@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
-import { Plus, Clock, Save, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2 } from 'lucide-react';
+import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send } from 'lucide-react';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
 // Talks only to /api/task-* endpoints; independent of the rest of the app.
@@ -86,8 +86,8 @@ export default function TaskView() {
   const addStatus = async () => { if (!newStatus.trim()) return; await fetchWithAuth(`${API_URL}/task-config/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newStatus.trim(), counts_time: newStatusCounts }) }); setNewStatus(''); setNewStatusCounts(false); fetchConfig(); };
   const delStatus = async (id: number) => { await fetchWithAuth(`${API_URL}/task-config/status/${id}`, { method: 'DELETE' }); fetchConfig(); };
 
-  const label = "text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1.5 block";
-  const field = "w-full px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white";
+  const label = "block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2";
+  const field = "w-full px-5 py-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800 text-[15px] font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white";
   const statusColor = (s: string) => s === 'Completed' || s === 'Solved' ? 'text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20' : s === 'In Progress' ? 'text-amber-600 bg-amber-50 dark:bg-amber-900/20' : 'text-zinc-500 bg-zinc-100 dark:bg-zinc-800';
 
   return (
@@ -114,64 +114,75 @@ export default function TaskView() {
       </div>
 
       {/* ===== Section 1: New Technical Log ===== */}
-      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-6 shadow-sm">
-        <div className="flex items-center gap-2 mb-5">
-          <Plus className="text-brand" size={18} />
-          <h2 className="font-black text-zinc-900 dark:text-white">{ar ? 'مهمة تقنية جديدة' : 'New Technical Log'}</h2>
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-6 md:p-9 shadow-sm">
+        <div className="flex items-start gap-3 mb-7">
+          <ClipboardList className="text-brand mt-0.5 shrink-0" size={26} />
+          <div>
+            <h2 className="text-2xl font-black text-zinc-900 dark:text-white tracking-tight">{ar ? 'مهمة تقنية جديدة' : 'New Technical Log'}</h2>
+            <p className="text-zinc-400 font-medium text-sm mt-0.5">{ar ? 'التاريخ والوقت يُسجّلان تلقائياً.' : 'Date & time are recorded automatically.'}</p>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div>
-            <label className={label}>{ar ? 'نوع السجل' : 'Log Type'}</label>
-            <div className="w-full px-4 py-2.5 rounded-xl bg-brand/10 text-brand text-sm font-black border-2 border-brand/20">Technical Log</div>
-          </div>
-          <div>
-            <label className={label}>{ar ? 'نوع المهمة *' : 'Technical Task Type *'}</label>
-            <select value={activityType} onChange={(e) => setActivityType(e.target.value)} className={field}>
-              <option value="">{ar ? 'اختر المهمة...' : 'Select task...'}</option>
-              {activities.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={label}>{ar ? 'الحالة *' : 'Status *'}</label>
-            <select value={status} onChange={(e) => setStatus(e.target.value)} className={field}>
-              <option value="">{ar ? 'اختر الحالة...' : 'Select status...'}</option>
-              {statuses.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
-            </select>
-          </div>
-          <div>
-            <label className={label}>{ar ? 'البراند' : 'Brand'}</label>
-            <select value={brandId} onChange={(e) => setBrandId(e.target.value)} className={field}>
-              <option value="">{ar ? '— بدون —' : '— None —'}</option>
-              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
-          </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+          {/* Log Type — full width */}
           <div className="md:col-span-2">
-            <label className={label}>{ar ? 'الوقت المستغرق (دقائق) *' : 'Time Spent (minutes) *'}</label>
-            <div className="flex flex-wrap items-center gap-2">
-              <input type="number" min={0} value={minutes || ''} onChange={(e) => setMinutes(Math.max(0, Number(e.target.value)))}
-                placeholder="0" className={cn(field, "w-28 flex-none")} />
-              <span className="text-zinc-400 font-bold text-xs">{ar ? 'دقيقة' : 'min'}</span>
-              <div className="flex flex-wrap gap-1.5">
-                {QUICK_MINS.map((m) => (
-                  <button key={m} type="button" onClick={() => setMinutes(m)}
-                    className={cn("px-3 py-1.5 rounded-lg text-xs font-black transition",
-                      minutes === m ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand")}>
-                    {m}m
-                  </button>
-                ))}
-              </div>
+            <label className={label}>{ar ? 'نوع السجل:' : 'Log Type:'}</label>
+            <div className="relative">
+              <div className={cn(field, "flex items-center pe-11")}>Technical Log</div>
+              <ChevronDown size={18} className="absolute end-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
             </div>
           </div>
+
+          <div>
+            <label className={label}>{ar ? 'نوع المهمة:' : 'Technical Task Type:'} <span className="text-brand">*</span></label>
+            <SelectField value={activityType} onChange={(e) => setActivityType(e.target.value)}>
+              <option value="">{ar ? 'اختر المهمة...' : 'Select task...'}</option>
+              {activities.map((a) => <option key={a.id} value={a.name}>{a.name}</option>)}
+            </SelectField>
+          </div>
+
+          <div>
+            <label className={label}>{ar ? 'الحالة:' : 'Status:'} <span className="text-brand">*</span></label>
+            <SelectField value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">{ar ? 'اختر الحالة...' : 'Select status...'}</option>
+              {statuses.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </SelectField>
+          </div>
+
+          <div>
+            <label className={label}>{ar ? 'الوقت المستغرق (دقائق):' : 'Time Spent (minutes):'} <span className="text-brand">*</span></label>
+            <input type="number" min={0} value={minutes || ''} onChange={(e) => setMinutes(Math.max(0, Number(e.target.value)))}
+              placeholder={ar ? 'مثال: 15' : 'e.g. 15'} className={field} />
+            <div className="flex flex-wrap gap-2 mt-2.5">
+              {QUICK_MINS.map((m) => (
+                <button key={m} type="button" onClick={() => setMinutes(m)}
+                  className={cn("px-3.5 py-1.5 rounded-lg text-xs font-black transition",
+                    minutes === m ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand")}>
+                  {m}m
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className={label}>{ar ? 'البراند:' : 'Brand:'}</label>
+            <SelectField value={brandId} onChange={(e) => setBrandId(e.target.value)}>
+              <option value="">{ar ? '— اختر —' : '— Select —'}</option>
+              {brands.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
+            </SelectField>
+          </div>
+
           <div className="md:col-span-2">
-            <label className={label}>{ar ? 'ملاحظات' : 'Notes'}</label>
-            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
-              placeholder={ar ? 'اختياري...' : 'Optional...'}
+            <label className={label}>{ar ? 'ملاحظات:' : 'Notes:'}</label>
+            <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
+              placeholder={ar ? 'ملاحظات...' : 'Notes...'}
               className={cn(field, "resize-none font-medium")} />
           </div>
         </div>
+
         <button onClick={save} disabled={!canSave}
-          className="mt-5 w-full md:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 rounded-xl bg-brand text-white text-sm font-black uppercase tracking-widest hover:opacity-90 disabled:opacity-50 transition-all active:scale-95">
-          {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+          className="mt-7 w-full inline-flex items-center justify-center gap-2.5 px-8 py-4 rounded-2xl bg-brand text-white text-base font-black hover:bg-brand-dark disabled:opacity-50 transition-all active:scale-[0.99]">
+          {saving ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
           {ar ? 'حفظ السجل' : 'Save Log'}
         </button>
       </div>
@@ -312,6 +323,18 @@ export default function TaskView() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SelectField({ value, onChange, children }: { value: string; onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void; children: React.ReactNode }) {
+  return (
+    <div className="relative">
+      <select value={value} onChange={onChange}
+        className="w-full px-5 py-4 pe-11 rounded-2xl bg-zinc-50 dark:bg-zinc-800 text-[15px] font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white appearance-none cursor-pointer">
+        {children}
+      </select>
+      <ChevronDown size={18} className="absolute end-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
     </div>
   );
 }
