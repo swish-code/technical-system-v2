@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate, safeJson } from '../../lib/utils';
-import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare, Send } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare, Send, Play, CheckCheck, ArrowRightLeft, Undo2, Timer } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { PendingRequest } from '../../types';
 import * as XLSX from 'xlsx';
@@ -11,6 +11,40 @@ import { useWebSocket } from '../../hooks/useWebSocket';
 
 interface PendingRequestsViewProps {
   filterType?: 'hide_unhide' | 'busy_branch';
+}
+
+// ---- Ticket workflow types ----
+interface TicketMine {
+  id: number;
+  ticket_type: string;
+  ticket_id: number;
+  assigned_at: string;
+  elapsed_seconds: number;
+}
+interface TicketHolder {
+  assigned_to: number;
+  assigned_to_name: string;
+}
+interface TicketAgent {
+  id: number;
+  username: string;
+}
+
+// Client-side live timer counting up from an ISO timestamp. mm:ss (or hh:mm:ss).
+function LiveTimer({ since }: { since: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const startMs = new Date(since).getTime();
+  const total = Math.max(0, Math.floor((now - startMs) / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const label = h > 0 ? `${pad(h)}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+  return <span className="tabular-nums font-black">{label}</span>;
 }
 
 export default function PendingRequestsView({ filterType }: PendingRequestsViewProps) {
@@ -37,6 +71,90 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 10;
+
+  // ---- Ticket workflow state ----
+  const [ticketMine, setTicketMine] = useState<TicketMine | null>(null);
+  const [ticketActive, setTicketActive] = useState<Record<string, TicketHolder>>({});
+  const [agents, setAgents] = useState<TicketAgent[]>([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  // Which ticket key currently has its transfer/reassign picker open.
+  const [transferOpenKey, setTransferOpenKey] = useState<string | null>(null);
+  const [ticketBusyKey, setTicketBusyKey] = useState<string | null>(null);
+
+  const keyOf = (type: string, id: number) => `${type}:${id}`;
+  const holderOf = (type: string, id: number): TicketHolder | undefined => ticketActive[keyOf(type, id)];
+  const isMine = (type: string, id: number) =>
+    !!ticketMine && ticketMine.ticket_type === type && ticketMine.ticket_id === id;
+  const iAmBusy = ticketMine != null;
+  const isAdmin = user?.role_name === 'Manager' || user?.role_name === 'Super Visor' || user?.role_name === 'Operation Manager';
+
+  const fetchTicketState = async () => {
+    try {
+      const res = await fetchWithAuth(`${API_URL}/tickets/state`);
+      if (!res.ok) return;
+      const data = await safeJson(res);
+      if (!data) return;
+      setTicketMine(data.mine || null);
+      const map: Record<string, TicketHolder> = {};
+      (Array.isArray(data.active) ? data.active : []).forEach((a: any) => {
+        map[keyOf(a.ticket_type, a.ticket_id)] = { assigned_to: a.assigned_to, assigned_to_name: a.assigned_to_name };
+      });
+      setTicketActive(map);
+    } catch { /* ignore */ }
+  };
+
+  const loadAgents = async () => {
+    if (agentsLoaded) return;
+    try {
+      const res = await fetchWithAuth(`${API_URL}/tickets/agents`);
+      if (res.ok) {
+        const data = await safeJson(res);
+        setAgents(Array.isArray(data) ? data : []);
+        setAgentsLoaded(true);
+      }
+    } catch { /* ignore */ }
+  };
+
+  // POST helper: surfaces server errors via alert, then refreshes ticket state + the relevant list.
+  const ticketAction = async (
+    path: string,
+    body: Record<string, any>,
+    type: string,
+  ) => {
+    const key = keyOf(String(body.ticket_type ?? type), Number(body.ticket_id));
+    setTicketBusyKey(key);
+    try {
+      const res = await fetchWithAuth(`${API_URL}/tickets/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const data = await safeJson(res);
+        alert(data?.error || (lang === 'en' ? 'Action failed' : 'فشل الإجراء'));
+        return;
+      }
+      await fetchTicketState();
+      if (type === 'chat') await fetchTickets();
+      else await fetchRequests();
+    } catch (e: any) {
+      if (e?.isAuthError) return;
+      alert(lang === 'en' ? 'Action failed' : 'فشل الإجراء');
+    } finally {
+      setTicketBusyKey(null);
+    }
+  };
+
+  const pickTicket = (type: string, id: number) =>
+    ticketAction('claim', { ticket_type: type, ticket_id: id }, type);
+  const doneTicket = (type: string, id: number) =>
+    ticketAction('done', { ticket_type: type, ticket_id: id }, type);
+  const releaseTicket = (type: string, id: number) =>
+    ticketAction('release', { ticket_type: type, ticket_id: id }, type);
+  const transferTicket = (type: string, id: number, toId: number) => {
+    setTransferOpenKey(null);
+    return ticketAction('transfer', { ticket_type: type, ticket_id: id, to_agent_id: toId }, type);
+  };
 
   const fetchRequests = async () => {
     setLoading(true);
@@ -121,6 +239,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   useEffect(() => {
     fetchRequests();
     fetchTickets();
+    fetchTicketState();
   }, []);
 
   useEffect(() => {
@@ -129,6 +248,9 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     }
     if (lastMessage?.type === 'BRANCH_CHAT_UPDATED') {
       fetchTickets();
+    }
+    if (lastMessage?.type === 'TICKETS_UPDATED') {
+      fetchTicketState();
     }
   }, [lastMessage]);
 
@@ -248,6 +370,115 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const totalPages = Math.ceil(filteredRequests.length / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginatedRequests = filteredRequests.slice(startIndex, startIndex + pageSize);
+
+  // Inline agent picker used by both Transfer (mine) and Reassign (admin).
+  const renderTransferPicker = (type: string, id: number) => (
+    <select
+      autoFocus
+      defaultValue=""
+      onChange={(e) => {
+        const v = Number(e.target.value);
+        if (v) transferTicket(type, id, v);
+      }}
+      onBlur={() => setTransferOpenKey(null)}
+      className="px-3 py-1.5 bg-white dark:bg-zinc-800 border-2 border-zinc-200 dark:border-zinc-700 rounded-lg font-bold text-xs outline-none focus:border-brand text-zinc-900 dark:text-white"
+    >
+      <option value="" disabled>{lang === 'en' ? 'Transfer to…' : 'تحويل إلى…'}</option>
+      {agents
+        .filter(a => !user || a.id !== user.id)
+        .map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
+    </select>
+  );
+
+  // Reusable ticket workflow controls. Wired into the PENDING view only.
+  const renderTicketControls = (type: string, id: number, _brandId?: number) => {
+    const key = keyOf(type, id);
+    const busy = ticketBusyKey === key;
+    const spinner = <Loader2 size={16} className="animate-spin" />;
+
+    if (isMine(type, id) && ticketMine) {
+      return (
+        <div className="flex flex-wrap items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-900/40">
+          <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-500 text-white text-[10px] font-black uppercase tracking-widest">
+            <Timer size={13} />
+            {lang === 'en' ? 'In Progress' : 'قيد التنفيذ'}
+            <LiveTimer since={ticketMine.assigned_at} />
+          </span>
+          <button
+            onClick={() => doneTicket(type, id)}
+            disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500 text-white rounded-lg font-bold text-sm hover:bg-emerald-600 transition-all disabled:opacity-50 active:scale-95"
+          >
+            {busy ? spinner : <CheckCheck size={16} />}
+            {lang === 'en' ? 'Mark Done' : 'تم الإنجاز'}
+          </button>
+          {transferOpenKey === key ? renderTransferPicker(type, id) : (
+            <button
+              onClick={() => { loadAgents(); setTransferOpenKey(key); }}
+              disabled={busy}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 rounded-lg font-bold text-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all disabled:opacity-50 active:scale-95"
+            >
+              <ArrowRightLeft size={16} />
+              {lang === 'en' ? 'Transfer' : 'تحويل'}
+            </button>
+          )}
+          <button
+            onClick={() => releaseTicket(type, id)}
+            disabled={busy}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-200 rounded-lg font-bold text-sm hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all disabled:opacity-50 active:scale-95"
+          >
+            <Undo2 size={16} />
+            {lang === 'en' ? 'Release' : 'إرجاع'}
+          </button>
+        </div>
+      );
+    }
+
+    const holder = holderOf(type, id);
+    if (holder) {
+      return (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 text-xs font-bold">
+            <User size={14} />
+            {lang === 'en' ? 'In progress · ' : 'قيد التنفيذ · '}{holder.assigned_to_name}
+          </span>
+          {isAdmin && (transferOpenKey === key ? renderTransferPicker(type, id) : (
+            <>
+              <button
+                onClick={() => { loadAgents(); setTransferOpenKey(key); }}
+                disabled={busy}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-lg font-bold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all disabled:opacity-50 active:scale-95"
+              >
+                <ArrowRightLeft size={14} />
+                {lang === 'en' ? 'Reassign' : 'تحويل'}
+              </button>
+              <button
+                onClick={() => releaseTicket(type, id)}
+                disabled={busy}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 rounded-lg font-bold text-xs hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-all disabled:opacity-50 active:scale-95"
+              >
+                <Undo2 size={14} />
+                {lang === 'en' ? 'Release' : 'إرجاع'}
+              </button>
+            </>
+          ))}
+        </div>
+      );
+    }
+
+    // Available — offer Pick (disabled while I already hold another ticket).
+    return (
+      <button
+        onClick={() => pickTicket(type, id)}
+        disabled={busy || iAmBusy}
+        title={iAmBusy ? (lang === 'en' ? 'Finish or transfer your current ticket first' : 'أنهِ أو حوّل تذكرتك الحالية أولاً') : undefined}
+        className="flex items-center gap-1.5 px-4 py-2 bg-brand text-white rounded-xl font-bold text-sm hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed active:scale-95"
+      >
+        {busy ? spinner : <Play size={16} />}
+        {lang === 'en' ? 'Pick' : 'استلام'}
+      </button>
+    );
+  };
 
   if (loading) {
     return (
@@ -429,6 +660,12 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     </button>
                   </div>
                 </div>
+                {/* Ticket workflow — pick, reply, mark done */}
+                {user?.role_name !== 'Restaurants' && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {renderTicketControls('chat', t.id, t.brand_id)}
+                  </div>
+                )}
                 {/* Inline reply — sends a real chat message; the ticket clears once answered */}
                 <div className="flex items-center gap-2">
                   <input
@@ -535,25 +772,8 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     >
                       <Eye size={18} />
                     </button>
-                    {request.status === 'Pending' && user?.role_name !== 'Restaurants' && (
-                      <>
-                        <button
-                          onClick={() => handleAction(request.id, 'approve')}
-                          disabled={processingId === request.id}
-                          className="flex items-center gap-2 px-4 py-2 bg-emerald-500 text-white rounded-xl font-bold hover:bg-emerald-600 transition-all disabled:opacity-50"
-                        >
-                          {processingId === request.id ? <Loader2 size={18} className="animate-spin" /> : <Check size={18} />}
-                          {lang === 'en' ? 'Approve' : 'موافقة'}
-                        </button>
-                        <button
-                          onClick={() => handleAction(request.id, 'reject')}
-                          disabled={processingId === request.id}
-                          className="flex items-center gap-2 px-4 py-2 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all disabled:opacity-50"
-                        >
-                          {processingId === request.id ? <Loader2 size={18} className="animate-spin" /> : <X size={18} />}
-                          {lang === 'en' ? 'Reject' : 'رفض'}
-                        </button>
-                      </>
+                    {viewMode === 'pending' && user?.role_name !== 'Restaurants' && (
+                      renderTicketControls(request.type, request.id, request.data?.brand_id)
                     )}
                     {request.status === 'Pending' && user?.role_name === 'Restaurants' && (
                       <div className="px-4 py-1.5 bg-amber-100 text-amber-700 rounded-xl font-bold text-xs uppercase tracking-widest">

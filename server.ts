@@ -948,6 +948,31 @@ async function initDb() {
     sort_order INTEGER DEFAULT 0
   );
 
+  -- Ticket workflow: an agent PICKS a hide/busy/chat ticket (single assignment),
+  -- does the work on the aggregators, then marks it DONE — which records the
+  -- action (via applyPendingRequest for hide/busy) and auto-logs a task with
+  -- duration = done - picked. Additive; no existing table is touched.
+  CREATE TABLE IF NOT EXISTS ticket_assignments (
+    id SERIAL PRIMARY KEY,
+    ticket_type TEXT NOT NULL,            -- 'hide_unhide' | 'busy_branch' | 'chat'
+    ticket_id INTEGER NOT NULL,           -- pending_requests.id or branch_messages.id
+    assigned_to INTEGER NOT NULL,         -- agent holding it
+    assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'in_progress', -- 'in_progress' | 'done' | 'transferred'
+    done_at TIMESTAMP,
+    done_by INTEGER,
+    duration_seconds INTEGER,
+    task_log_id INTEGER,                  -- the activity_logs row created on done
+    brand_id INTEGER,
+    branch_id INTEGER
+  );
+  -- Atomic single-claim: at most one ACTIVE (in_progress) holder per ticket.
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_ticket_active
+    ON ticket_assignments (ticket_type, ticket_id) WHERE status = 'in_progress';
+  -- Fast "does this agent already hold one?" + queue lookups.
+  CREATE INDEX IF NOT EXISTS idx_ticket_active_agent
+    ON ticket_assignments (assigned_to) WHERE status = 'in_progress';
+
   -- Group chat (admin-created, member-scoped, multi-user) — separate from the
   -- branch chat model. chat_group_members controls who can see/use a group.
   CREATE TABLE IF NOT EXISTS chat_groups (
@@ -1166,7 +1191,7 @@ try {
     "Delayed Orders Follow-up", "Aggregator Follow-up", "Missing Item Cases", "Wrong Dispatch Cases",
     "Big Order Confirmation", "Order Assignment", "Aggregator Comments", "Punch Orders",
     "Open Branch", "Busy Branch", "Close Branch", "Hide Item", "Unhide Item",
-    "Follow-up Groups", "Cancellation Request", "Foodics / POS Issues", "Other",
+    "Follow-up Groups", "Cancellation Request", "Foodics / POS Issues", "Invoice Chat", "Other",
   ];
   for (let i = 0; i < techActivities.length; i++) {
     await db.query("INSERT INTO tech_activity (name, sort_order) VALUES ($1, $2) ON CONFLICT (name) DO NOTHING", [techActivities[i], i]);
@@ -3475,17 +3500,13 @@ async function startServer() {
     }
   });
 
-  app.post("/api/pending-requests/:id/approve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
-    const { id } = req.params;
-    const request = await db.get("SELECT * FROM pending_requests WHERE id = $1", [id]) as any;
-    
-    if (!request || request.status !== 'Pending') {
-      return res.status(400).json({ error: "Invalid request" });
-    }
-    
+  // Shared core of "approve": performs the hide/unhide/busy recording (the same
+  // hidden_items / hide_history / busy_period writes + broadcasts as always) and
+  // marks the request Approved. Reused by the classic approve endpoint and by
+  // the new ticket "Done" flow. processorUserId = the office agent performing it.
+  const applyPendingRequest = async (request: any, processorUserId: number) => {
     const data = JSON.parse(request.data);
-    
-    try {
+    {
       if (request.type === 'hide_unhide') {
         if (data.action === 'UNHIDE') {
           const unhide_at = getCurrentKuwaitTime();
@@ -3679,7 +3700,7 @@ async function startServer() {
             WHERE id = $4
           `, [end_time, total_duration, total_duration_minutes, data.id]);
 
-          await logAction((req as any).user.id, "BUSY_UPDATE", "busy_period_records", Number(data.id), null, { 
+          await logAction(processorUserId, "BUSY_UPDATE", "busy_period_records", Number(data.id), null, {
             brand: data.brand, branch: data.branch, end_time, total_duration, reason_category: data.reason_category, approved_open: true
           });
 
@@ -3729,9 +3750,16 @@ async function startServer() {
         }
       }
       
-      await db.query("UPDATE pending_requests SET status = 'Approved', processed_by = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [(req as any).user.id, id]);
-        
+      await db.query("UPDATE pending_requests SET status = 'Approved', processed_by = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", [processorUserId, request.id]);
       broadcast({ type: "PENDING_REQUEST_UPDATED" });
+    }
+  };
+
+  app.post("/api/pending-requests/:id/approve", authenticate, authorize(["Technical Back Office", "Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    const request = await db.get("SELECT * FROM pending_requests WHERE id = $1", [req.params.id]) as any;
+    if (!request || request.status !== 'Pending') return res.status(400).json({ error: "Invalid request" });
+    try {
+      await applyPendingRequest(request, (req as any).user.id);
       res.json({ success: true });
     } catch (error) {
       console.error("Error approving request:", error);
@@ -3769,6 +3797,191 @@ async function startServer() {
       message_ar: `تم رفض طلب (${request.type})`,
     });
     res.json({ success: true });
+  });
+
+  // ===== Ticket workflow: pick -> do work -> done, single assignment ==========
+  // An agent PICKS a hide/busy/chat ticket (locked to them), does the work on
+  // the aggregators, then marks DONE — which records the action (hide/busy via
+  // applyPendingRequest) and auto-logs a task (duration = done - picked).
+  // Lightweight: single-row indexed reads/writes, no polling, WebSocket refresh.
+  const TICKET_WORK_ROLES = ["Technical Back Office", "Manager", "Super Visor", "Operation Manager"];
+  const TICKET_TYPES = ['hide_unhide', 'busy_branch', 'chat'];
+  const ticketActivity = (ticketType: string, data: any): string => {
+    if (ticketType === 'chat') return 'Invoice Chat';
+    if (ticketType === 'busy_branch') return data?.action === 'OPEN' ? 'Open Branch' : 'Busy Branch';
+    return data?.action === 'UNHIDE' ? 'Unhide Item' : 'Hide Item';
+  };
+  // Resolve a ticket's brand/branch + whether it's still open (claimable).
+  const getTicketMeta = async (ticketType: string, ticketId: number) => {
+    if (ticketType === 'chat') {
+      const m = await db.get("SELECT brand_id, branch_id, sender_role, resolved_at FROM branch_messages WHERE id = $1", [ticketId]) as any;
+      if (!m || m.sender_role !== 'Restaurants') return null;
+      return { open: m.resolved_at == null, brand_id: m.brand_id ?? null, branch_id: m.branch_id ?? null, data: null };
+    }
+    const r = await db.get("SELECT status, data FROM pending_requests WHERE id = $1 AND type = $2", [ticketId, ticketType]) as any;
+    if (!r) return null;
+    let data: any = {}; try { data = JSON.parse(r.data); } catch {}
+    const brand_id = typeof data.brand_id === 'number' ? data.brand_id : null;
+    const branch_id = typeof data.branch_id === 'number' ? data.branch_id : null;
+    return { open: r.status === 'Pending', brand_id, branch_id, data };
+  };
+
+  // Current agent's active ticket + who holds every active ticket (for badging).
+  app.get("/api/tickets/state", authenticate, authorize(TICKET_WORK_ROLES), async (req, res) => {
+    try {
+      const uid = (req as any).user.id;
+      const mine = await db.get(`
+        SELECT id, ticket_type, ticket_id, assigned_at,
+          EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int AS elapsed_seconds
+        FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1`, [uid]);
+      const active = await db.all(`
+        SELECT ta.ticket_type, ta.ticket_id, ta.assigned_to, u.username AS assigned_to_name
+        FROM ticket_assignments ta JOIN users u ON u.id = ta.assigned_to
+        WHERE ta.status = 'in_progress'`);
+      res.json({ mine: mine || null, active });
+    } catch (e) {
+      console.error("tickets/state error:", e);
+      res.status(500).json({ error: "Failed to load ticket state" });
+    }
+  });
+
+  // PICK a ticket (atomic single-claim + one-per-agent).
+  app.post("/api/tickets/claim", authenticate, authorize(TICKET_WORK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const ticket_type = String(req.body.ticket_type || '');
+    const ticket_id = Number(req.body.ticket_id);
+    if (!TICKET_TYPES.includes(ticket_type) || !Number.isFinite(ticket_id)) return res.status(400).json({ error: "Invalid ticket" });
+    try {
+      const busy = await db.get("SELECT 1 FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1", [user.id]);
+      if (busy) return res.status(409).json({ error: "Finish or transfer your current ticket first" });
+      const meta = await getTicketMeta(ticket_type, ticket_id);
+      if (!meta) return res.status(404).json({ error: "Ticket not found" });
+      if (!meta.open) return res.status(409).json({ error: "Ticket is no longer available" });
+      try {
+        await db.query(`
+          INSERT INTO ticket_assignments (ticket_type, ticket_id, assigned_to, brand_id, branch_id)
+          VALUES ($1, $2, $3, $4, $5)`, [ticket_type, ticket_id, user.id, meta.brand_id, meta.branch_id]);
+      } catch (e: any) {
+        // uniq_ticket_active violation → someone claimed it a moment ago.
+        return res.status(409).json({ error: "Ticket was just taken by another agent" });
+      }
+      // Notify the store it's being handled (in-app only — no push, to stay light).
+      broadcast({
+        type: "NOTIFICATION", notificationType: "SYSTEM_ACTION",
+        title_en: "Request in progress", title_ar: "طلبك قيد التنفيذ",
+        message_en: `Your request is being handled by ${user.username}`,
+        message_ar: `يتم العمل على طلبك بواسطة ${user.username}`,
+        ...(meta.brand_id ? { brand_id: meta.brand_id } : {}),
+        ...(meta.branch_id ? { branch_id: meta.branch_id } : {}),
+        role_target: ["Restaurants"],
+      });
+      broadcast({ type: "TICKETS_UPDATED" });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("tickets/claim error:", e);
+      res.status(500).json({ error: "Failed to claim ticket" });
+    }
+  });
+
+  // MARK DONE: record the action (hide/busy) + auto-log the task.
+  app.post("/api/tickets/done", authenticate, authorize(TICKET_WORK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const ticket_type = String(req.body.ticket_type || '');
+    const ticket_id = Number(req.body.ticket_id);
+    if (!TICKET_TYPES.includes(ticket_type) || !Number.isFinite(ticket_id)) return res.status(400).json({ error: "Invalid ticket" });
+    try {
+      const a = await db.get(`
+        SELECT id, assigned_to, brand_id, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int AS secs
+        FROM ticket_assignments WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'`, [ticket_type, ticket_id]) as any;
+      if (!a) return res.status(404).json({ error: "No active assignment for this ticket" });
+      if (a.assigned_to !== user.id && !isAdmin) return res.status(403).json({ error: "This ticket is assigned to another agent" });
+
+      let data: any = {};
+      // For hide/busy: run the same recording the classic approve does.
+      if (ticket_type !== 'chat') {
+        const request = await db.get("SELECT * FROM pending_requests WHERE id = $1", [ticket_id]) as any;
+        if (request) {
+          try { data = JSON.parse(request.data); } catch {}
+          if (request.status === 'Pending') await applyPendingRequest(request, user.id);
+        }
+      }
+      const durationSeconds = Math.max(1, Number(a.secs) || 1);
+      const activity = ticketActivity(ticket_type, data);
+      const ins = await db.query(`
+        INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
+        VALUES ('technical', 'Technical', $1, 'Completed', $2, $3, $4, $5, $6) RETURNING id`,
+        [activity, durationSeconds, a.brand_id, `Ticket #${ticket_id} (${ticket_type})`, user.id, user.username]);
+      await db.query(`
+        UPDATE ticket_assignments SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
+          duration_seconds = $2, task_log_id = $3 WHERE id = $4`, [user.id, durationSeconds, ins.rows[0].id, a.id]);
+      broadcast({ type: "TICKETS_UPDATED" });
+      broadcast({ type: "PENDING_REQUEST_UPDATED" });
+      res.json({ success: true, duration_seconds: durationSeconds });
+    } catch (e) {
+      console.error("tickets/done error:", e);
+      res.status(500).json({ error: "Failed to mark done" });
+    }
+  });
+
+  // TRANSFER to another agent (fresh timer; whoever marks Done gets the task).
+  app.post("/api/tickets/transfer", authenticate, authorize(TICKET_WORK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const ticket_type = String(req.body.ticket_type || '');
+    const ticket_id = Number(req.body.ticket_id);
+    const to_agent_id = Number(req.body.to_agent_id);
+    if (!TICKET_TYPES.includes(ticket_type) || !Number.isFinite(ticket_id) || !Number.isFinite(to_agent_id)) return res.status(400).json({ error: "Invalid input" });
+    try {
+      const a = await db.get("SELECT * FROM ticket_assignments WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'", [ticket_type, ticket_id]) as any;
+      if (!a) return res.status(404).json({ error: "No active assignment" });
+      if (a.assigned_to !== user.id && !isAdmin) return res.status(403).json({ error: "Only the holder or a supervisor can transfer" });
+      if (to_agent_id === a.assigned_to) return res.status(400).json({ error: "Already assigned to that agent" });
+      const target = await db.get("SELECT u.id, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1", [to_agent_id]) as any;
+      if (!target || !TICKET_WORK_ROLES.includes(target.role)) return res.status(400).json({ error: "Target is not a technical agent" });
+      const targetBusy = await db.get("SELECT 1 FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1", [to_agent_id]);
+      if (targetBusy) return res.status(409).json({ error: "That agent already has an active ticket" });
+      await db.query("UPDATE ticket_assignments SET status = 'transferred', done_at = CURRENT_TIMESTAMP WHERE id = $1", [a.id]);
+      await db.query(`INSERT INTO ticket_assignments (ticket_type, ticket_id, assigned_to, brand_id, branch_id) VALUES ($1, $2, $3, $4, $5)`,
+        [ticket_type, ticket_id, to_agent_id, a.brand_id, a.branch_id]);
+      broadcast({ type: "TICKETS_UPDATED" });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("tickets/transfer error:", e);
+      res.status(500).json({ error: "Failed to transfer" });
+    }
+  });
+
+  // RELEASE back to the pool (the holder, or a supervisor for a stuck ticket).
+  app.post("/api/tickets/release", authenticate, authorize(TICKET_WORK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const ticket_type = String(req.body.ticket_type || '');
+    const ticket_id = Number(req.body.ticket_id);
+    if (!TICKET_TYPES.includes(ticket_type) || !Number.isFinite(ticket_id)) return res.status(400).json({ error: "Invalid ticket" });
+    try {
+      const a = await db.get("SELECT id, assigned_to FROM ticket_assignments WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'", [ticket_type, ticket_id]) as any;
+      if (!a) return res.status(404).json({ error: "No active assignment" });
+      if (a.assigned_to !== user.id && !isAdmin) return res.status(403).json({ error: "Only the holder or a supervisor can release" });
+      await db.query("UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP WHERE id = $1", [a.id]);
+      broadcast({ type: "TICKETS_UPDATED" });
+      res.json({ success: true });
+    } catch (e) {
+      console.error("tickets/release error:", e);
+      res.status(500).json({ error: "Failed to release" });
+    }
+  });
+
+  // Technical agents (for the transfer dropdown).
+  app.get("/api/tickets/agents", authenticate, authorize(TICKET_WORK_ROLES), async (_req, res) => {
+    try {
+      const rows = await db.all(`
+        SELECT u.id, u.username FROM users u JOIN roles r ON u.role_id = r.id
+        WHERE r.name = 'Technical Back Office' AND u.is_active = 1 ORDER BY u.username`);
+      res.json(rows);
+    } catch (e) {
+      res.status(500).json({ error: "Failed to load agents" });
+    }
   });
 
   // Late Order Requests
