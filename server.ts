@@ -3876,14 +3876,14 @@ async function startServer() {
   // Resolve a ticket's brand/branch + whether it's still open (claimable).
   const getTicketMeta = async (ticketType: string, ticketId: number) => {
     if (ticketType === 'chat') {
-      const m = await db.get("SELECT brand_id, branch_id, sender_role, resolved_at, created_at FROM branch_messages WHERE id = $1", [ticketId]) as any;
+      const m = await db.get("SELECT brand_id, branch_id, sender_role, resolved_at, cleared_at FROM branch_messages WHERE id = $1", [ticketId]) as any;
       if (!m || m.sender_role !== 'Restaurants') return null;
-      // Open only while unresolved, unanswered (no office reply after it) and un-liked
-      // — same rule as the ticket list, so a replied/liked ticket stops being claimable
-      // and any hold on it is treated as stale (see the auto-release in claim).
-      const answered = await db.get("SELECT 1 FROM branch_messages o WHERE o.branch_id = $1 AND o.sender_role <> 'Restaurants' AND o.created_at > $2 LIMIT 1", [m.branch_id, m.created_at]);
+      // Per-message: open (claimable / a valid hold) while it hasn't been
+      // individually handled — not dismissed (resolved_at), not marked done
+      // (cleared_at), not liked. Matches the tickets-list rule, so a held ticket
+      // is only auto-released once THAT message is actually handled.
       const liked = await db.get("SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = $1 LIMIT 1", [ticketId]);
-      const open = m.resolved_at == null && !answered && !liked;
+      const open = m.resolved_at == null && m.cleared_at == null && !liked;
       return { open, brand_id: m.brand_id ?? null, branch_id: m.branch_id ?? null, data: null };
     }
     const r = await db.get("SELECT status, data FROM pending_requests WHERE id = $1 AND type = $2", [ticketId, ticketType]) as any;
@@ -4004,6 +4004,11 @@ async function startServer() {
         WHERE id = $2 AND status = 'in_progress'
         RETURNING id, duration_seconds`, [user.id, a.id]) as any;
       if (!won) return res.json({ success: true, already: true });
+      // Per-message clear: mark ONLY this chat message handled, so the store's
+      // other pending messages stay as tickets.
+      if (ticket_type === 'chat') {
+        await db.query("UPDATE branch_messages SET cleared_at = CURRENT_TIMESTAMP WHERE id = $1 AND cleared_at IS NULL", [ticket_id]);
+      }
       const durationSeconds = Math.max(1, Number(won.duration_seconds) || 1);
       const activity = ticketActivity(ticket_type, data);
       const ins = await db.query(`
@@ -4109,6 +4114,23 @@ async function startServer() {
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolve_reason TEXT"); } catch (e) {}
+  // Per-message ticket clearing: a restaurant message leaves the tickets list
+  // only when INDIVIDUALLY handled (marked done, dismissed, or liked) — NOT when
+  // any office reply appears (which used to clear a store's whole backlog at
+  // once). `cleared_at` is set when its ticket is marked done. The ADD COLUMN
+  // succeeds exactly once (first deploy) → run a ONE-TIME backfill freezing all
+  // already-answered historical messages as cleared, so switching to per-message
+  // doesn't resurrect thousands of old tickets. (Runs only inside this try, so a
+  // later generic reply can never re-trigger the office-after backfill.)
+  try {
+    await db.exec("ALTER TABLE branch_messages ADD COLUMN cleared_at TIMESTAMP");
+    await db.exec(`UPDATE branch_messages bm SET cleared_at = CURRENT_TIMESTAMP
+      WHERE bm.sender_role = 'Restaurants' AND bm.cleared_at IS NULL AND bm.resolved_at IS NULL
+        AND EXISTS (SELECT 1 FROM branch_messages o
+          WHERE o.branch_id = bm.branch_id AND o.sender_role <> 'Restaurants' AND o.created_at > bm.created_at)`);
+    console.log("branch_messages.cleared_at added + one-time backfill done");
+  } catch (e) { /* column already exists — backfill already ran once */ }
+  try { await db.exec("CREATE INDEX IF NOT EXISTS idx_bm_open_ticket ON branch_messages (branch_id) WHERE sender_role='Restaurants' AND resolved_at IS NULL AND cleared_at IS NULL"); } catch (e) {}
   try {
     // Who (which user) sent the office-side response, so the UI shows the real name.
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN responded_by INTEGER");
@@ -8035,39 +8057,32 @@ async function startServer() {
       broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
     } catch (e) { console.error("branch-chat unread-badge broadcast failed", e); }
 
-    // Ticket workflow sync: an office reply ANSWERS this branch's chat tickets
-    // (that's what removes them from the Requests-tab list), so completing the
-    // assignment must not depend on which screen the reply came from.
-    //  - The SENDER's own in-progress chat hold on this branch → mark done +
-    //    auto-log the task (duration = pick → this reply). Atomic UPDATE ...
-    //    WHERE status='in_progress' so a concurrent /api/tickets/done (the
-    //    Send & Done button) can never double-log the same task.
-    //  - OTHER agents' holds on this branch are now stale (someone else
-    //    answered) → release them so they aren't stuck "in progress" forever.
+    // Ticket workflow sync (per-message): completing a ticket must clear ONLY
+    // the specific message it was for — never a store's whole backlog. If the
+    // office sender is holding a chat ticket on THIS branch, this reply completes
+    // it: mark the hold done, set that message's cleared_at (so only that ticket
+    // leaves the list), and auto-log the task. Atomic (WHERE status='in_progress')
+    // so a concurrent /api/tickets/done can't double-log. Other agents' holds and
+    // the store's other pending messages are deliberately left untouched.
     if (!fromRestaurant) {
       try {
         const doneRow = await db.get(`
           UPDATE ticket_assignments ta
           SET status = 'done', done_at = CURRENT_TIMESTAMP, done_by = $1,
-              duration_seconds = EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ta.assigned_at))::int
+              duration_seconds = GREATEST(1, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - ta.assigned_at))::int)
           WHERE ta.status = 'in_progress' AND ta.ticket_type = 'chat' AND ta.assigned_to = $1
             AND EXISTS (SELECT 1 FROM branch_messages rm WHERE rm.id = ta.ticket_id AND rm.branch_id = $2)
           RETURNING ta.id, ta.ticket_id, ta.duration_seconds, ta.brand_id
         `, [user.id, branch.id]) as any;
         if (doneRow) {
+          await db.query("UPDATE branch_messages SET cleared_at = CURRENT_TIMESTAMP WHERE id = $1 AND cleared_at IS NULL", [doneRow.ticket_id]);
           const taskIns = await db.query(`
             INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
             VALUES ('technical', 'Technical', 'Invoice Chat', 'Completed', $1, $2, $3, $4, $5) RETURNING id`,
             [Math.max(1, Number(doneRow.duration_seconds) || 1), doneRow.brand_id, `Ticket #${doneRow.ticket_id} (chat)`, user.id, user.username]);
           await db.query("UPDATE ticket_assignments SET task_log_id = $1 WHERE id = $2", [taskIns.rows[0].id, doneRow.id]);
+          broadcast({ type: "TICKETS_UPDATED" });
         }
-        const releasedOthers = await db.query(`
-          UPDATE ticket_assignments ta
-          SET status = 'released', done_at = CURRENT_TIMESTAMP
-          WHERE ta.status = 'in_progress' AND ta.ticket_type = 'chat' AND ta.assigned_to <> $1
-            AND EXISTS (SELECT 1 FROM branch_messages rm WHERE rm.id = ta.ticket_id AND rm.branch_id = $2)
-        `, [user.id, branch.id]);
-        if (doneRow || (releasedOthers.rowCount || 0) > 0) broadcast({ type: "TICKETS_UPDATED" });
       } catch (e) { console.error("branch-chat ticket sync failed", e); }
     }
 
@@ -8232,21 +8247,20 @@ async function startServer() {
       params.push(allowed);
       brandCond = ` AND bm.brand_id = ANY($1)`;
     }
+    // One ticket PER MESSAGE: a restaurant message stays a ticket until it is
+    // individually handled — dismissed (resolved_at), marked done (cleared_at),
+    // or liked. A generic office reply no longer clears a store's other pending
+    // messages (that was the "mark one done → the rest vanish" bug).
     const rows = await db.all(`
-      WITH last_office AS (
-        SELECT branch_id, MAX(created_at) AS t
-        FROM branch_messages WHERE sender_role <> 'Restaurants' GROUP BY branch_id
-      )
       SELECT bm.id, bm.brand_id, bm.branch_id, bm.comment, bm.image_url, bm.created_at, bm.sender_id,
         b.name AS brand_name, br.name AS branch_name, u.username
       FROM branch_messages bm
       JOIN brands b ON bm.brand_id = b.id
       JOIN branches br ON bm.branch_id = br.id
       JOIN users u ON bm.sender_id = u.id
-      LEFT JOIN last_office lf ON lf.branch_id = bm.branch_id
       WHERE bm.sender_role = 'Restaurants'
         AND bm.resolved_at IS NULL
-        AND (lf.t IS NULL OR bm.created_at > lf.t)
+        AND bm.cleared_at IS NULL
         AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type = 'branch' AND mr.message_id = bm.id)${brandCond}
       ORDER BY bm.created_at DESC
     `, params);
