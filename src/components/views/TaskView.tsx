@@ -32,7 +32,7 @@ export default function TaskView() {
   const [date, setDate] = useState(today);
   const [logs, setLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
-  const [tab, setTab] = useState<'new' | 'dash' | 'config'>('new');
+  const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config'>('new');
 
   // Config editing
   const [newActivity, setNewActivity] = useState('');
@@ -109,7 +109,8 @@ export default function TaskView() {
       {/* Sub-tabs — each section shows on its own; the form hides when you switch away */}
       <div className="flex gap-1 p-1 bg-zinc-100 dark:bg-zinc-800/60 rounded-2xl w-full sm:w-fit overflow-x-auto">
         <TabButton active={tab === 'new'} onClick={() => setTab('new')} icon={<Plus size={16} />}>{ar ? 'مهمة جديدة' : 'New Log'}</TabButton>
-        <TabButton active={tab === 'dash'} onClick={() => setTab('dash')} icon={<Gauge size={16} />}>{ar ? 'الملخص والسجلات' : 'Overview & Logs'}</TabButton>
+        <TabButton active={tab === 'dash'} onClick={() => setTab('dash')} icon={<Gauge size={16} />}>{ar ? 'الملخص' : 'Overview'}</TabButton>
+        <TabButton active={tab === 'logs'} onClick={() => setTab('logs')} icon={<ListChecks size={16} />}>{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</TabButton>
         {isAdmin && <TabButton active={tab === 'config'} onClick={() => setTab('config')} icon={<Settings size={16} />}>{ar ? 'الإعدادات' : 'Configuration'}</TabButton>}
       </div>
 
@@ -246,11 +247,16 @@ export default function TaskView() {
           </div>
         </div>
       )}
+      </div>
+      )}
 
-      {/* ===== Section 3: Team Logs ===== */}
+      {/* ===== Section 3: Team Logs (own tab) ===== */}
+      {tab === 'logs' && (
       <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-        <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800">
+        <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="font-black text-zinc-900 dark:text-white">{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</h2>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -281,7 +287,6 @@ export default function TaskView() {
             </tbody>
           </table>
         </div>
-      </div>
       </div>
       )}
 
