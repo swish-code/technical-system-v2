@@ -88,6 +88,9 @@ export default function BranchChatView() {
   const [comment, setComment] = useState('');
   const [images, setImages] = useState<File[]>([]);
   const [imagePreviews, setImagePreviews] = useState<string[]>([]);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  // Auto-grow the composer as it wraps (Shift+Enter adds a line), capped at ~5 rows.
+  useEffect(() => { const t = composerRef.current; if (t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 128) + 'px'; } }, [comment]);
   const [sending, setSending] = useState(false);
   const [replyTo, setReplyTo] = useState<ChatMessage | null>(null);
   const [flashId, setFlashId] = useState<number | null>(null);
@@ -713,13 +716,15 @@ export default function BranchChatView() {
                 <Paperclip size={18} />
                 <input type="file" accept="image/*,video/*" multiple className="hidden" onChange={pickFile} />
               </label>
-              <input
+              <textarea
+                ref={composerRef}
+                rows={1}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendGroup(); } }}
                 onPaste={handlePaste}
                 placeholder={lang === 'ar' ? 'اكتب رسالة...' : 'Write a message...'}
-                className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
+                className="flex-1 resize-none max-h-32 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white" />
               <button onClick={sendGroup} disabled={sending || (!comment.trim() && images.length === 0)}
                 className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
                 <Send size={18} />
@@ -938,14 +943,15 @@ export default function BranchChatView() {
                 <Paperclip size={20} />
                 <input type="file" accept="image/*,video/*" multiple className="hidden" onChange={pickFile} />
               </label>
-              <input
-                type="text"
+              <textarea
+                ref={composerRef}
+                rows={1}
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') send(); }}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
                 onPaste={handlePaste}
                 placeholder={lang === 'ar' ? 'اكتب تعليقًا...' : 'Write a comment...'}
-                className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
+                className="flex-1 min-w-0 resize-none max-h-32 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 border-2 border-transparent focus:border-brand outline-none text-sm font-medium text-zinc-900 dark:text-white"
               />
               <button onClick={send} disabled={sending || (!comment.trim() && images.length === 0)} className="shrink-0 p-2.5 rounded-xl bg-brand text-white disabled:opacity-50">
                 <Send size={20} />
