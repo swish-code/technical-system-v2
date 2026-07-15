@@ -8325,6 +8325,17 @@ async function startServer() {
     // Respond immediately; notifications/push run after (don't block the sender).
     res.json({ id: ins.rows[0].id });
 
+    // Replying = reading: mark THIS sender as having read the thread up to now, so a
+    // reply sent from the Requests Branch "Send & Done" (without opening the chat)
+    // clears their own unread badge for this branch — not just when they open it.
+    try {
+      await db.query(`
+        INSERT INTO branch_reads (user_id, branch_id, last_read_at)
+        VALUES ($1, $2, CURRENT_TIMESTAMP)
+        ON CONFLICT (user_id, branch_id) DO UPDATE SET last_read_at = CURRENT_TIMESTAMP
+      `, [user.id, branch.id]);
+    } catch (e) { console.error("branch-chat sender read-mark failed", e); }
+
     // Every message updates the in-app unread badge instantly.
     try {
       broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branch.id });
