@@ -948,6 +948,31 @@ async function initDb() {
     sort_order INTEGER DEFAULT 0
   );
 
+  -- Assigned Tasks: a Manager assigns a task to a Technical Back Office employee;
+  -- the employee works it New→In Progress→Completed and logs time on completion.
+  CREATE TABLE IF NOT EXISTS assigned_tasks (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    assigned_by INTEGER NOT NULL,
+    assigned_by_name TEXT NOT NULL,
+    assigned_to INTEGER NOT NULL,
+    assigned_to_name TEXT NOT NULL,
+    department TEXT,
+    priority TEXT NOT NULL DEFAULT 'Medium',
+    due_date TIMESTAMP,
+    status TEXT NOT NULL DEFAULT 'New',
+    seen BOOLEAN DEFAULT false,
+    duration_seconds INTEGER,
+    note TEXT,
+    require_time_entry BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_assigned_tasks_to ON assigned_tasks(assigned_to, status);
+  CREATE INDEX IF NOT EXISTS idx_assigned_tasks_by ON assigned_tasks(assigned_by, created_at DESC);
+
   -- Ticket workflow: an agent PICKS a hide/busy/chat ticket (single assignment),
   -- does the work on the aggregators, then marks it DONE — which records the
   -- action (via applyPendingRequest for hide/busy) and auto-logs a task with
@@ -3352,6 +3377,103 @@ async function startServer() {
       GROUP BY al.agent_name, day`, params);
     res.json(rows);
   });
+
+  // ===================== Assigned Tasks (Assign / My Tasks / Tracker) =====================
+  // Manager assigns to a Technical Back Office employee; on completion the logged
+  // time also writes an activity_logs row so it counts in productivity. Self-contained.
+  const ASSIGN_MANAGER_ROLES = ["Manager"];
+  const ASSIGNEE_ROLE = "Technical Back Office";
+
+  app.get("/api/assigned-tasks/assignees", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (_req, res) => {
+    const rows = await db.all(`SELECT u.id, u.username FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = $1 AND u.is_active = 1 ORDER BY u.username`, [ASSIGNEE_ROLE]);
+    res.json(rows);
+  });
+
+  app.post("/api/assigned-tasks", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const title = (req.body.title || '').trim();
+    const description = (req.body.description || '').trim() || null;
+    const assignedTo = Number(req.body.assigned_to);
+    const priority = ['High', 'Medium', 'Low'].includes(req.body.priority) ? req.body.priority : 'Medium';
+    const dueDate = req.body.due_date || null;
+    const requireTime = req.body.require_time_entry !== false;
+    if (!title) return res.status(400).json({ error: "Title is required" });
+    if (!Number.isFinite(assignedTo)) return res.status(400).json({ error: "Assignee is required" });
+    const target = await db.get(`SELECT u.id, u.username, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1`, [assignedTo]) as any;
+    if (!target || target.role !== ASSIGNEE_ROLE) return res.status(400).json({ error: "Assignee must be a Technical Back Office employee" });
+    const ins = await db.query(`
+      INSERT INTO assigned_tasks (title, description, assigned_by, assigned_by_name, assigned_to, assigned_to_name, department, priority, due_date, require_time_entry)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
+      [title, description, user.id, user.username, target.id, target.username, ASSIGNEE_ROLE, priority, dueDate, requireTime]);
+    broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: target.id });
+    broadcast({ type: "NOTIFICATION", notificationType: "SYSTEM_ACTION", title_en: "New task assigned", title_ar: "مهمة جديدة مُعيّنة لك", message_en: title, message_ar: title, user_id: target.id });
+    res.json({ id: ins.rows[0].id, success: true });
+  });
+
+  app.get("/api/assigned-tasks/mine", authenticate, async (req, res) => {
+    const user = (req as any).user;
+    const rows = await db.all(`SELECT * FROM assigned_tasks WHERE assigned_to = $1 ORDER BY (status='Completed'), COALESCE(due_date, created_at) ASC`, [user.id]);
+    res.json(rows);
+  });
+
+  app.post("/api/assigned-tasks/seen", authenticate, async (req, res) => {
+    const user = (req as any).user;
+    await db.query(`UPDATE assigned_tasks SET seen = true WHERE assigned_to = $1 AND seen = false`, [user.id]);
+    res.json({ success: true });
+  });
+
+  app.patch("/api/assigned-tasks/:id/status", authenticate, async (req, res) => {
+    const user = (req as any).user;
+    const id = Number(req.params.id);
+    const status = req.body.status;
+    if (!['New', 'In Progress', 'Completed'].includes(status)) return res.status(400).json({ error: "Invalid status" });
+    const t = await db.get(`SELECT * FROM assigned_tasks WHERE id = $1`, [id]) as any;
+    if (!t) return res.status(404).json({ error: "Task not found" });
+    if (t.assigned_to !== user.id) return res.status(403).json({ error: "Not your task" });
+    if (status === 'Completed') {
+      const minutes = Math.round(Number(req.body.minutes) || 0);
+      const note = (req.body.note || '').trim() || null;
+      if (t.require_time_entry && minutes <= 0) return res.status(400).json({ error: "Time (minutes > 0) is required to complete this task" });
+      const durationSeconds = minutes > 0 ? minutes * 60 : 0;
+      await db.query(`UPDATE assigned_tasks SET status='Completed', completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, duration_seconds=$1, note=$2, seen=true WHERE id=$3`, [durationSeconds, note, id]);
+      if (durationSeconds > 0) {
+        await db.query(`INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, notes, agent_id, agent_name) VALUES ('technical','Technical','Assigned Task','Completed',$1,$2,$3,$4)`, [durationSeconds, t.title, user.id, user.username]);
+      }
+    } else {
+      await db.query(`UPDATE assigned_tasks SET status=$1, updated_at=CURRENT_TIMESTAMP, seen=true WHERE id=$2`, [status, id]);
+    }
+    broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
+    res.json({ success: true });
+  });
+
+  app.get("/api/assigned-tasks", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (_req, res) => {
+    const rows = await db.all(`SELECT * FROM assigned_tasks ORDER BY (status='Completed'), COALESCE(due_date, created_at) ASC`);
+    res.json(rows);
+  });
+
+  app.patch("/api/assigned-tasks/:id", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    const id = Number(req.params.id);
+    const exists = await db.get(`SELECT id FROM assigned_tasks WHERE id = $1`, [id]) as any;
+    if (!exists) return res.status(404).json({ error: "Task not found" });
+    const title = (req.body.title || '').trim();
+    if (!title) return res.status(400).json({ error: "Title is required" });
+    const description = (req.body.description || '').trim() || null;
+    const priority = ['High', 'Medium', 'Low'].includes(req.body.priority) ? req.body.priority : 'Medium';
+    const dueDate = req.body.due_date || null;
+    const assignedTo = Number(req.body.assigned_to);
+    const target = await db.get(`SELECT u.id, u.username, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1`, [assignedTo]) as any;
+    if (!target || target.role !== ASSIGNEE_ROLE) return res.status(400).json({ error: "Assignee must be a Technical Back Office employee" });
+    await db.query(`UPDATE assigned_tasks SET title=$1, description=$2, assigned_to=$3, assigned_to_name=$4, priority=$5, due_date=$6, updated_at=CURRENT_TIMESTAMP WHERE id=$7`, [title, description, target.id, target.username, priority, dueDate, id]);
+    broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: target.id });
+    res.json({ success: true });
+  });
+
+  app.delete("/api/assigned-tasks/:id", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    await db.query(`DELETE FROM assigned_tasks WHERE id = $1`, [Number(req.params.id)]);
+    broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
+    res.json({ success: true });
+  });
+  // =================== end Assigned Tasks ===================
 
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
+import AssignedTasksView from './AssignedTasksView';
 import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
@@ -13,6 +14,8 @@ export default function TaskView() {
   const { fetchWithAuth } = useFetch();
   const ar = lang === 'ar';
   const isAdmin = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
+  const isManager = user?.role_name === 'Manager';
+  const isAssignee = user?.role_name === 'Technical Back Office';
 
   const [activities, setActivities] = useState<any[]>([]);
   const [statuses, setStatuses] = useState<any[]>([]);
@@ -38,7 +41,7 @@ export default function TaskView() {
   const pageSize = 20;
   const [logs, setLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
-  const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config'>('new');
+  const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config' | 'assign' | 'mytasks' | 'tracker'>('new');
 
   // Config editing
   const [newActivity, setNewActivity] = useState('');
@@ -58,6 +61,7 @@ export default function TaskView() {
     return new Date(Date.UTC(y, m, d - dow)).toISOString().slice(0, 10);
   });
   const [weekly, setWeekly] = useState<any[]>([]);
+  const [myUnseen, setMyUnseen] = useState(0);
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -82,11 +86,13 @@ export default function TaskView() {
   const fetchWeekly = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/weekly?week_start=${weekStart}`); if (r.ok) setWeekly(await r.json()); } catch { /* ignore */ }
   };
+  const fetchMyUnseen = async () => { if (!isAssignee) return; try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/mine`); if (r.ok) { const d = await r.json(); setMyUnseen((d || []).filter((x: any) => !x.seen).length); } } catch { /* ignore */ } };
   const fetchSummary = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
 
-  useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); }, []);
+  useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); fetchMyUnseen(); }, []);
+  useEffect(() => { if (tab === 'mytasks') setMyUnseen(0); }, [tab]);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
   useEffect(() => { fetchSummary(); fetchHandoffs(); }, [date]);
   useEffect(() => { fetchWeekly(); }, [weekStart]);
@@ -216,6 +222,9 @@ export default function TaskView() {
         <TabButton active={tab === 'new'} onClick={() => setTab('new')} icon={<Plus size={16} />}>{ar ? 'مهمة جديدة' : 'New Log'}</TabButton>
         <TabButton active={tab === 'dash'} onClick={() => setTab('dash')} icon={<Gauge size={16} />}>{ar ? 'الملخص' : 'Overview'}</TabButton>
         <TabButton active={tab === 'logs'} onClick={() => setTab('logs')} icon={<ListChecks size={16} />}>{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</TabButton>
+        {isAssignee && <TabButton active={tab === 'mytasks'} onClick={() => setTab('mytasks')} icon={<ListChecks size={16} />}>{ar ? 'مهامي' : 'My Tasks'}{myUnseen > 0 && <span className="ml-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black inline-flex items-center justify-center">{myUnseen}</span>}</TabButton>}
+        {isManager && <TabButton active={tab === 'assign'} onClick={() => setTab('assign')} icon={<Plus size={16} />}>{ar ? 'تعيين مهمة' : 'Assign Task'}</TabButton>}
+        {isManager && <TabButton active={tab === 'tracker'} onClick={() => setTab('tracker')} icon={<ClipboardList size={16} />}>{ar ? 'متابعة المهام' : 'Task Tracker'}</TabButton>}
         {isAdmin && <TabButton active={tab === 'config'} onClick={() => setTab('config')} icon={<Settings size={16} />}>{ar ? 'الإعدادات' : 'Configuration'}</TabButton>}
       </div>
 
@@ -502,6 +511,10 @@ export default function TaskView() {
         )}
       </div>
       )}
+
+      {tab === 'assign' && <AssignedTasksView mode="assign" />}
+      {tab === 'mytasks' && <AssignedTasksView mode="mytasks" />}
+      {tab === 'tracker' && <AssignedTasksView mode="tracker" />}
 
       {/* ===== Section 4: Configuration (admins, own tab) ===== */}
       {tab === 'config' && isAdmin && (
