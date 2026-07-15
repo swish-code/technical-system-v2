@@ -206,15 +206,6 @@ export default function TaskView() {
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-          {/* Log Type — full width */}
-          <div className="md:col-span-2">
-            <label className={label}>{ar ? 'نوع السجل:' : 'Log Type:'}</label>
-            <div className="relative">
-              <div className={cn(field, "flex items-center pe-11")}>Technical Log</div>
-              <ChevronDown size={18} className="absolute end-4 top-1/2 -translate-y-1/2 text-zinc-400 pointer-events-none" />
-            </div>
-          </div>
-
           <div>
             <label className={label}>{ar ? 'نوع المهمة:' : 'Technical Task Type:'} <span className="text-brand">*</span></label>
             <SelectField value={activityType} onChange={(e) => setActivityType(e.target.value)}>
