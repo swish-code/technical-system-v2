@@ -24,7 +24,8 @@ import {
   Plus,
   Trash2,
   Eye,
-  X
+  X,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Brand } from '../../types';
@@ -111,6 +112,9 @@ export default function AnalyticsView() {
   const [hidesReport, setHidesReport] = useState<HideReport[]>([]);
   const [brandHidesToday, setBrandHidesToday] = useState<BrandHidesToday[]>([]);
   const [busyReport, setBusyReport] = useState<BusyReport[]>([]);
+  const [expandedBusy, setExpandedBusy] = useState<string | null>(null);
+  const [busyBreakdown, setBusyBreakdown] = useState<Record<string, any[]>>({});
+  const [loadingBreakdown, setLoadingBreakdown] = useState<string | null>(null);
   const [reasonsReport, setReasonsReport] = useState<ReasonReport[]>([]);
   const [timelineData, setTimelineData] = useState<TimelineData[]>([]);
   const [userKpi, setUserKpi] = useState<UserKpi[]>([]);
@@ -399,6 +403,21 @@ export default function AnalyticsView() {
 
   const sortedBrands = [...brandsReport].sort((a, b) => b.total_products - a.total_products);
   const sortedHides = [...hidesReport].sort((a, b) => b.total_count - a.total_count);
+  // Click a busy branch to load its minutes split per brand (same date filters).
+  const toggleBusyBranch = async (name: string) => {
+    if (expandedBusy === name) { setExpandedBusy(null); return; }
+    setExpandedBusy(name);
+    setLoadingBreakdown(name);
+    try {
+      const qp = new URLSearchParams();
+      qp.append('branch_name', name);
+      if (filters.startDate) qp.append('startDate', filters.startDate);
+      if (filters.endDate) qp.append('endDate', filters.endDate);
+      const res = await fetchWithAuth(`${API_URL}/reports/branch-busy-by-brand?${qp.toString()}`);
+      if (res.ok) { const d = await res.json(); setBusyBreakdown((prev) => ({ ...prev, [name]: d })); }
+    } catch { /* ignore */ } finally { setLoadingBreakdown(null); }
+  };
+
   const sortedBusy = [...busyReport].sort((a, b) => b.total_minutes - a.total_minutes);
 
   const peakHoursData = userActivityDetails.reduce((acc: any, log) => {
@@ -1320,22 +1339,35 @@ export default function AnalyticsView() {
               </h4>
               <div className="space-y-4">
                 {sortedBusy.slice(0, 5).map((b, i) => (
-                  <div key={i} className="flex items-center justify-between p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800 group hover:border-brand/30 transition-all">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center">
-                        <Building2 size={16} />
+                  <div key={i} className="rounded-2xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-100 dark:border-zinc-800 overflow-hidden hover:border-brand/30 transition-all">
+                    <button onClick={() => toggleBusyBranch(b.branch_name)} className="w-full flex items-center justify-between p-4 text-left">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-lg bg-brand/10 text-brand flex items-center justify-center">
+                          <Building2 size={16} />
+                        </div>
+                        <span className="text-sm font-black text-zinc-900 dark:text-white">{b.branch_name}</span>
+                        <ChevronDown size={14} className={cn("text-zinc-400 transition-transform", expandedBusy === b.branch_name && "rotate-180")} />
                       </div>
-                      <span className="text-sm font-black text-zinc-900 dark:text-white">{b.branch_name}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-bold text-brand">{b.total_minutes} {lang === 'ar' ? 'دقيقة' : 'Min'}</span>
-                      <div className="w-16 h-1 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
-                        <div 
-                          className="h-full bg-brand" 
-                          style={{ width: `${Math.min((b.total_minutes / 500) * 100, 100)}%` }}
-                        />
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-brand">{b.total_minutes} {lang === 'ar' ? 'دقيقة' : 'Min'}</span>
+                        <div className="w-16 h-1 bg-zinc-200 dark:bg-zinc-700 rounded-full overflow-hidden">
+                          <div className="h-full bg-brand" style={{ width: `${Math.min((b.total_minutes / 500) * 100, 100)}%` }} />
+                        </div>
                       </div>
-                    </div>
+                    </button>
+                    {expandedBusy === b.branch_name && (
+                      <div className="px-4 pb-4 pt-2 space-y-1.5 border-t border-zinc-100 dark:border-zinc-800">
+                        <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400 pt-1">{lang === 'ar' ? 'حسب البراند' : 'By Brand'}</p>
+                        {loadingBreakdown === b.branch_name && <p className="text-xs text-zinc-400 font-bold py-1">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>}
+                        {loadingBreakdown !== b.branch_name && (busyBreakdown[b.branch_name] || []).length === 0 && <p className="text-xs text-zinc-400 font-bold py-1">{lang === 'ar' ? 'لا توجد بيانات' : 'No data'}</p>}
+                        {(busyBreakdown[b.branch_name] || []).map((br: any, j: number) => (
+                          <div key={j} className="flex items-center justify-between text-sm">
+                            <span className="font-bold text-zinc-700 dark:text-zinc-300">{br.brand}</span>
+                            <span className="font-black text-brand text-xs">{br.total_minutes} {lang === 'ar' ? 'دقيقة' : 'Min'} <span className="text-zinc-400 font-bold">· {br.total_instances}×</span></span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

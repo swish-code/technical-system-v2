@@ -7526,9 +7526,40 @@ async function startServer() {
     }
 
     query += " GROUP BY branch ORDER BY total_minutes DESC";
-    
+
     const report = await db.all(query, params);
     res.json(report);
+  });
+
+  // Drill-down: one branch's busy minutes split PER BRAND (same date filters).
+  app.get("/api/reports/branch-busy-by-brand", authenticate, async (req, res) => {
+    const branchName = String(req.query.branch_name || '');
+    if (!branchName) return res.status(400).json({ error: "branch_name is required" });
+    const user = (req as any).user;
+    if (user.role_name === 'Area Manager') {
+      const branchIds = await getBranchRestriction(user);
+      const allowed = branchIds && branchIds.length
+        ? (await db.all(`SELECT name FROM branches WHERE id IN (${branchIds.map((_, i) => `$${i + 1}`).join(',')})`, branchIds)).map((b: any) => b.name)
+        : [];
+      if (!allowed.includes(branchName)) return res.json([]);
+    }
+    const { period, startDate, endDate } = req.query as any;
+    const conditions: string[] = ["branch = $1"];
+    const params: any[] = [branchName];
+    if (startDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length + 1}`); params.push(startDate); }
+    if (endDate) { conditions.push(`(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length + 1}`); params.push(endDate); }
+    if (!startDate && !endDate) {
+      if (period === 'today') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date");
+      else if (period === 'week') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '7 days'");
+      else if (period === 'month') conditions.push("(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date - INTERVAL '30 days'");
+    }
+    const rows = await db.all(`
+      SELECT COALESCE(NULLIF(brand, ''), '—') AS brand,
+        COALESCE(SUM(total_duration_minutes), 0)::int AS total_minutes,
+        COUNT(*)::int AS total_instances
+      FROM busy_period_records WHERE ${conditions.join(' AND ')}
+      GROUP BY brand ORDER BY total_minutes DESC`, params);
+    res.json(rows);
   });
 
   app.get("/api/reports/reasons", authenticate, async (req, res) => {
