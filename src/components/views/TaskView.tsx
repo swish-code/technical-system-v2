@@ -3,6 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import AssignedTasksView from './AssignedTasksView';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
@@ -12,6 +13,7 @@ const QUICK_MINS = [5, 10, 15, 30, 45, 60];
 export default function TaskView() {
   const { user, lang } = useAuth();
   const { fetchWithAuth } = useFetch();
+  const lastMessage = useWebSocket();
   const ar = lang === 'ar';
   const isAdmin = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   const isManager = user?.role_name === 'Manager';
@@ -93,6 +95,7 @@ export default function TaskView() {
 
   useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); fetchMyUnseen(); }, []);
   useEffect(() => { if (tab === 'mytasks') setMyUnseen(0); }, [tab]);
+  useEffect(() => { if (lastMessage?.type === 'ASSIGNED_TASKS_UPDATED' && tab !== 'mytasks') fetchMyUnseen(); }, [lastMessage]);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
   useEffect(() => { fetchSummary(); fetchHandoffs(); }, [date]);
   useEffect(() => { fetchWeekly(); }, [weekStart]);

@@ -3178,6 +3178,21 @@ async function startServer() {
     }
   };
 
+  // Browser push to a single user (e.g. the employee a task is assigned to).
+  const sendPushToUser = async (userId: number, payload: any) => {
+    try {
+      const subs = await db.all(`SELECT subscription FROM push_subscriptions WHERE user_id = $1`, [userId]);
+      for (const row of subs) {
+        const sub = JSON.parse(row.subscription);
+        webpush.sendNotification(sub, JSON.stringify(payload)).catch((err: any) => {
+          if (err.statusCode === 410 || err.statusCode === 404) db.query("DELETE FROM push_subscriptions WHERE subscription = $1", [row.subscription]);
+        });
+      }
+    } catch (error) {
+      console.error("Error sending push to user:", error);
+    }
+  };
+
   const getProductNameFieldId = async () => {
     const field = await db.get("SELECT id FROM dynamic_fields WHERE name_en = 'Product Name (EN)'") as { id: number } | undefined;
     return field?.id || 3;
@@ -3407,8 +3422,10 @@ async function startServer() {
       INSERT INTO assigned_tasks (title, description, assigned_by, assigned_by_name, assigned_to, assigned_to_name, department, task_type, priority, due_date, require_time_entry)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
       [title, description, user.id, user.username, target.id, target.username, ASSIGNEE_ROLE, taskType, priority, dueDate, requireTime]);
+    const notifyBody = title || taskType || 'مهمة مُعيّنة لك';
     broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: target.id });
-    broadcast({ type: "NOTIFICATION", notificationType: "SYSTEM_ACTION", title_en: "New task assigned", title_ar: "مهمة جديدة مُعيّنة لك", message_en: title, message_ar: title, user_id: target.id });
+    broadcast({ type: "NOTIFICATION", notificationType: "SYSTEM_ACTION", title_en: "New task assigned", title_ar: "مهمة جديدة مُعيّنة لك", message_en: notifyBody, message_ar: notifyBody, user_id: target.id });
+    sendPushToUser(target.id, { title: "مهمة جديدة مُعيّنة لك", body: notifyBody, tag: "assigned-task", data: { type: "ASSIGNED_TASK" } });
     res.json({ id: ins.rows[0].id, success: true });
   });
 
