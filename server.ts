@@ -3311,6 +3311,25 @@ async function startServer() {
     });
   });
 
+  // Edit a task log's status + time (owner, or admin for anyone) — e.g. Open → Completed.
+  app.patch("/api/task-logs/:id", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const id = Number(req.params.id);
+    const status = (req.body.status || '').trim();
+    const durationSeconds = Math.round(Number(req.body.duration_seconds));
+    if (!Number.isFinite(id)) return res.status(400).json({ error: "Invalid id" });
+    if (!status) return res.status(400).json({ error: "Status is required" });
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return res.status(400).json({ error: "Time spent must be greater than 0" });
+    const log = await db.get("SELECT id, agent_id FROM activity_logs WHERE id = $1", [id]) as any;
+    if (!log) return res.status(404).json({ error: "Log not found" });
+    if (!isAdmin && log.agent_id !== user.id) return res.status(403).json({ error: "You can only edit your own logs" });
+    const st = await db.get("SELECT 1 FROM cc_status WHERE name = $1", [status]);
+    if (!st) return res.status(400).json({ error: "Unknown status" });
+    await db.query("UPDATE activity_logs SET status = $1, duration_seconds = $2 WHERE id = $3", [status, durationSeconds, id]);
+    res.json({ success: true });
+  });
+
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
     const name = (req.body.name || '').trim();

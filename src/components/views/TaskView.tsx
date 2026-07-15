@@ -47,6 +47,10 @@ export default function TaskView() {
   const [agents, setAgents] = useState<any[]>([]);
   const [agentId, setAgentId] = useState('');
   const [handoffs, setHandoffs] = useState<{ transfers: any[]; releases: any[] }>({ transfers: [], releases: [] });
+  const [editLog, setEditLog] = useState<any | null>(null);
+  const [editStatus, setEditStatus] = useState('');
+  const [editMinutes, setEditMinutes] = useState<number>(0);
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -103,6 +107,31 @@ export default function TaskView() {
   const hours = (s: any) => ((Number(s) || 0) / 3600).toFixed(1);
   const ticketLabel = (t: string) => t === 'chat' ? (ar ? 'مراسلة فاتورة' : 'Invoice Chat') : t === 'busy_branch' ? (ar ? 'فرع مزدحم' : 'Busy Branch') : (ar ? 'إخفاء/إظهار' : 'Hide/Unhide');
 
+  // Click a log row to edit its status + time (e.g. flip Open → Completed).
+  const openEdit = (l: any) => {
+    setEditLog(l);
+    setEditStatus(l.status);
+    setEditMinutes(Math.round((Number(l.duration_seconds) || 0) / 60));
+  };
+  const saveEdit = async () => {
+    if (!editLog || !editStatus || editMinutes <= 0 || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const r = await fetchWithAuth(`${API_URL}/task-logs/${editLog.id}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: editStatus, duration_seconds: editMinutes * 60 }),
+      });
+      if (r.ok) {
+        setToast({ msg: ar ? 'تم تحديث المهمة ✓' : 'Task updated ✓', ok: true });
+        setEditLog(null); fetchLogs(); fetchSummary();
+      } else {
+        const e = await r.json().catch(() => ({}));
+        setToast({ msg: e.error || (ar ? 'فشل التحديث' : 'Update failed'), ok: false });
+      }
+    } catch { setToast({ msg: ar ? 'فشل التحديث' : 'Update failed', ok: false }); }
+    finally { setSavingEdit(false); }
+  };
+
   const addActivity = async () => { if (!newActivity.trim()) return; await fetchWithAuth(`${API_URL}/task-config/activity`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newActivity.trim() }) }); setNewActivity(''); fetchConfig(); };
   const delActivity = async (id: number) => { await fetchWithAuth(`${API_URL}/task-config/activity/${id}`, { method: 'DELETE' }); fetchConfig(); };
   const addStatus = async () => { if (!newStatus.trim()) return; await fetchWithAuth(`${API_URL}/task-config/status`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newStatus.trim(), counts_time: newStatusCounts }) }); setNewStatus(''); setNewStatusCounts(false); fetchConfig(); };
@@ -118,6 +147,35 @@ export default function TaskView() {
         <div className={cn("fixed top-6 right-6 z-[200] px-5 py-3 rounded-2xl font-black text-sm shadow-2xl flex items-center gap-2",
           toast.ok ? "bg-emerald-600 text-white" : "bg-red-500 text-white")}>
           {toast.ok ? <CheckCircle2 size={18} /> : <XCircle size={18} />}{toast.msg}
+        </div>
+      )}
+
+      {editLog && (
+        <div className="fixed inset-0 z-[210] bg-black/40 flex items-center justify-center p-4" onClick={() => setEditLog(null)}>
+          <div className="bg-white dark:bg-zinc-900 rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-black text-zinc-900 dark:text-white mb-0.5">{ar ? 'تعديل المهمة' : 'Edit Task'}</h3>
+            <p className="text-zinc-400 text-sm font-bold mb-4 truncate">{editLog.activity_type}</p>
+            <label className={label}>{ar ? 'الحالة' : 'Status'}</label>
+            <SelectField value={editStatus} onChange={(e) => setEditStatus(e.target.value)}>
+              {statuses.map((s) => <option key={s.id} value={s.name}>{s.name}</option>)}
+            </SelectField>
+            <div className="h-4" />
+            <label className={label}>{ar ? 'الوقت المستغرق (دقائق)' : 'Time Spent (minutes)'}</label>
+            <input type="number" min={1} value={editMinutes || ''} onChange={(e) => setEditMinutes(Math.max(0, Number(e.target.value)))} className={field} />
+            <div className="flex flex-wrap gap-2 mt-2.5">
+              {QUICK_MINS.map((m) => (
+                <button key={m} type="button" onClick={() => setEditMinutes(m)}
+                  className={cn("px-3.5 py-1.5 rounded-lg text-xs font-black transition", editMinutes === m ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand")}>{m}m</button>
+              ))}
+            </div>
+            <div className="flex gap-2 mt-6">
+              <button onClick={() => setEditLog(null)} className="flex-1 px-4 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-black text-sm">{ar ? 'إلغاء' : 'Cancel'}</button>
+              <button onClick={saveEdit} disabled={savingEdit || !editStatus || editMinutes <= 0}
+                className="flex-1 px-4 py-2.5 rounded-xl bg-brand text-white font-black text-sm disabled:opacity-50 inline-flex items-center justify-center gap-2">
+                {savingEdit ? <Loader2 size={16} className="animate-spin" /> : null}{ar ? 'حفظ' : 'Save'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -353,7 +411,7 @@ export default function TaskView() {
                 <tr><td colSpan={isAdmin ? 6 : 5} className="text-center text-zinc-400 font-bold py-10">{ar ? 'لا توجد سجلات في هذه الفترة' : 'No logs in this range'}</td></tr>
               )}
               {logs.map((l) => (
-                <tr key={l.id} className="border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+                <tr key={l.id} onClick={() => openEdit(l)} title={ar ? 'اضغط للتعديل' : 'Click to edit'} className="cursor-pointer border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
                   <td className="px-5 py-3 font-bold text-zinc-900 dark:text-white">{l.activity_type}{l.notes && <span className="block text-[11px] font-medium text-zinc-400 truncate max-w-xs">{l.notes}</span>}</td>
                   <td className="px-3 py-3"><span className={cn("text-[11px] font-black px-2 py-0.5 rounded-lg", statusColor(l.status))}>{l.status}</span></td>
                   <td className="px-3 py-3 font-black text-zinc-700 dark:text-zinc-300">{fmtDur(l.duration_seconds)}</td>
