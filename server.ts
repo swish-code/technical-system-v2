@@ -3193,6 +3193,25 @@ async function startServer() {
     }
   };
 
+  // Ping any @mentioned employee in a chat message (in-app toast + browser push),
+  // never the sender. For groups, pass memberIds to restrict to actual members.
+  const notifyMentions = async (comment: string | null, senderId: number, senderName: string, opts: { titleAr: string; titleEn: string; data?: any; memberIds?: number[] }) => {
+    try {
+      if (!comment) return;
+      const names = [...new Set((comment.match(/@([\w-]+)/g) || []).map((m) => m.slice(1).toLowerCase()))];
+      if (!names.length) return;
+      let users = await db.all(`SELECT id, username FROM users WHERE LOWER(username) = ANY($1) AND is_active = 1`, [names]) as any[];
+      users = users.filter((u) => u.id !== senderId);
+      if (opts.memberIds) users = users.filter((u) => opts.memberIds!.includes(u.id));
+      if (!users.length) return;
+      const preview = `${senderName}: ${comment.slice(0, 80)}`;
+      for (const u of users) {
+        broadcast({ type: "NOTIFICATION", notificationType: "SYSTEM_ACTION", title_en: opts.titleEn, title_ar: opts.titleAr, message_en: preview, message_ar: preview, user_id: u.id });
+        sendPushToUser(u.id, { title: opts.titleAr, body: preview, tag: "mention", data: opts.data || { type: "CHAT_MENTION" } });
+      }
+    } catch (e) { console.error("notifyMentions failed", e); }
+  };
+
   const getProductNameFieldId = async () => {
     const field = await db.get("SELECT id FROM dynamic_fields WHERE name_en = 'Product Name (EN)'") as { id: number } | undefined;
     return field?.id || 3;
@@ -8340,6 +8359,12 @@ async function startServer() {
       } catch (e) { console.error("branch-chat ticket sync failed", e); }
     }
 
+    // @mention notifications: ping any mentioned employee (in-app + push), not the sender.
+    await notifyMentions(comment, user.id, user.username, {
+      titleAr: `تم ذكرك في شات ${branch.name}`, titleEn: `You were mentioned in ${branch.name} chat`,
+      data: { type: "CHAT_MENTION", branch_id: branch.id },
+    });
+
     // Throttled browser push: at most ONE push per branch per minute, so bursts
     // of messages can't flood the pipeline (the reason chat push was disabled) or
     // drown out busy alarms. Only the OTHER side is notified (never the sender).
@@ -8887,6 +8912,14 @@ async function startServer() {
     `, [groupId, userId, comment, image_url, image_type, reply_to_id]);
     res.json({ id: ins.rows[0].id });
     try { broadcast({ type: "GROUP_UPDATED", group_id: Number(groupId) }); } catch (e) { console.error("group broadcast failed", e); }
+    try {
+      const grp = await db.get(`SELECT name FROM chat_groups WHERE id = $1`, [groupId]) as any;
+      const members = await db.all(`SELECT user_id FROM chat_group_members WHERE group_id = $1`, [groupId]);
+      await notifyMentions(comment, userId, (req as any).user.username, {
+        titleAr: `تم ذكرك في مجموعة ${grp?.name || ''}`, titleEn: `You were mentioned in ${grp?.name || 'a group'}`,
+        data: { type: "CHAT_MENTION", group_id: Number(groupId) }, memberIds: members.map((m: any) => m.user_id),
+      });
+    } catch (e) { console.error("group mention notify failed", e); }
   });
 
   // Toggle a 👍 like on a message (branch or group). One like per user per message.
