@@ -959,6 +959,7 @@ async function initDb() {
     assigned_to INTEGER NOT NULL,
     assigned_to_name TEXT NOT NULL,
     department TEXT,
+    task_type TEXT,
     priority TEXT NOT NULL DEFAULT 'Medium',
     due_date TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'New',
@@ -3397,14 +3398,15 @@ async function startServer() {
     const priority = ['High', 'Medium', 'Low'].includes(req.body.priority) ? req.body.priority : 'Medium';
     const dueDate = req.body.due_date || null;
     const requireTime = req.body.require_time_entry !== false;
+    const taskType = (req.body.task_type || '').trim() || null;
     if (!title) return res.status(400).json({ error: "Title is required" });
     if (!Number.isFinite(assignedTo)) return res.status(400).json({ error: "Assignee is required" });
     const target = await db.get(`SELECT u.id, u.username, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1`, [assignedTo]) as any;
     if (!target || target.role !== ASSIGNEE_ROLE) return res.status(400).json({ error: "Assignee must be a Technical Back Office employee" });
     const ins = await db.query(`
-      INSERT INTO assigned_tasks (title, description, assigned_by, assigned_by_name, assigned_to, assigned_to_name, department, priority, due_date, require_time_entry)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-      [title, description, user.id, user.username, target.id, target.username, ASSIGNEE_ROLE, priority, dueDate, requireTime]);
+      INSERT INTO assigned_tasks (title, description, assigned_by, assigned_by_name, assigned_to, assigned_to_name, department, task_type, priority, due_date, require_time_entry)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id`,
+      [title, description, user.id, user.username, target.id, target.username, ASSIGNEE_ROLE, taskType, priority, dueDate, requireTime]);
     broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: target.id });
     broadcast({ type: "NOTIFICATION", notificationType: "SYSTEM_ACTION", title_en: "New task assigned", title_ar: "مهمة جديدة مُعيّنة لك", message_en: title, message_ar: title, user_id: target.id });
     res.json({ id: ins.rows[0].id, success: true });
@@ -3437,7 +3439,7 @@ async function startServer() {
       const durationSeconds = minutes > 0 ? minutes * 60 : 0;
       await db.query(`UPDATE assigned_tasks SET status='Completed', completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, duration_seconds=$1, note=$2, seen=true WHERE id=$3`, [durationSeconds, note, id]);
       if (durationSeconds > 0) {
-        await db.query(`INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, notes, agent_id, agent_name) VALUES ('technical','Technical','Assigned Task','Completed',$1,$2,$3,$4)`, [durationSeconds, t.title, user.id, user.username]);
+        await db.query(`INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, notes, agent_id, agent_name) VALUES ('technical','Technical',$1,'Completed',$2,$3,$4,$5)`, [t.task_type || 'Assigned Task', durationSeconds, t.title, user.id, user.username]);
       }
     } else {
       await db.query(`UPDATE assigned_tasks SET status=$1, updated_at=CURRENT_TIMESTAMP, seen=true WHERE id=$2`, [status, id]);
@@ -3461,9 +3463,10 @@ async function startServer() {
     const priority = ['High', 'Medium', 'Low'].includes(req.body.priority) ? req.body.priority : 'Medium';
     const dueDate = req.body.due_date || null;
     const assignedTo = Number(req.body.assigned_to);
+    const taskType = (req.body.task_type || '').trim() || null;
     const target = await db.get(`SELECT u.id, u.username, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1`, [assignedTo]) as any;
     if (!target || target.role !== ASSIGNEE_ROLE) return res.status(400).json({ error: "Assignee must be a Technical Back Office employee" });
-    await db.query(`UPDATE assigned_tasks SET title=$1, description=$2, assigned_to=$3, assigned_to_name=$4, priority=$5, due_date=$6, updated_at=CURRENT_TIMESTAMP WHERE id=$7`, [title, description, target.id, target.username, priority, dueDate, id]);
+    await db.query(`UPDATE assigned_tasks SET title=$1, description=$2, assigned_to=$3, assigned_to_name=$4, task_type=$5, priority=$6, due_date=$7, updated_at=CURRENT_TIMESTAMP WHERE id=$8`, [title, description, target.id, target.username, taskType, priority, dueDate, id]);
     broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: target.id });
     res.json({ success: true });
   });
@@ -4284,6 +4287,7 @@ async function startServer() {
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN reply_to_id INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_at TIMESTAMP"); } catch (e) {}
+  try { await db.exec("ALTER TABLE assigned_tasks ADD COLUMN task_type TEXT"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolve_reason TEXT"); } catch (e) {}
   // Per-message ticket clearing: a restaurant message leaves the tickets list
