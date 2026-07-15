@@ -35,7 +35,7 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
   const [requireTime, setRequireTime] = useState(true);
   const [saving, setSaving] = useState(false);
   const saveAssign = async () => {
-    if (!title.trim() || !assignTo || saving) return;
+    if (!assignTo || saving) return;
     setSaving(true);
     try {
       const r = await fetchWithAuth(`${API_URL}/assigned-tasks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title: title.trim(), description: desc.trim() || null, assigned_to: Number(assignTo), task_type: taskType || null, due_date: due || null, priority, require_time_entry: requireTime }) });
@@ -117,15 +117,11 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
   ) : null;
 
   if (mode === 'assign') {
-    const canSave = !!title.trim() && !!assignTo && !saving;
+    const canSave = !!assignTo && !saving;
     return (<div>{Toast}
       <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-6 md:p-8 max-w-3xl">
         <h2 className="text-xl font-black text-zinc-900 dark:text-white mb-5 flex items-center gap-2"><Plus className="text-brand" size={20} />{ar ? 'تعيين مهمة' : 'Assign Task'}</h2>
         <div className="space-y-4">
-          <div><label className={label}>{ar ? 'العنوان' : 'Title'} <span className="text-brand">*</span></label>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} className={field} placeholder={ar ? 'عنوان المهمة...' : 'Task title...'} /></div>
-          <div><label className={label}>{ar ? 'الوصف' : 'Description'}</label>
-            <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3} className={cn(field, 'resize-none font-medium')} placeholder={ar ? 'اختياري...' : 'Optional...'} /></div>
           <div><label className={label}>{ar ? 'نوع المهمة' : 'Task Type'}</label>
             <select value={taskType} onChange={(e) => setTaskType(e.target.value)} className={field}>
               <option value="">{ar ? '— اختر —' : '— Select —'}</option>
@@ -145,6 +141,10 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
             <input type="checkbox" checked={requireTime} onChange={(e) => setRequireTime(e.target.checked)} className="w-4 h-4 accent-[color:var(--color-brand)]" />
             <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">{ar ? 'طلب تسجيل الوقت عند الإنهاء' : 'Require time entry to complete'}</span>
           </label>
+          <div><label className={label}>{ar ? 'العنوان' : 'Title'}</label>
+            <input value={title} onChange={(e) => setTitle(e.target.value)} className={field} placeholder={ar ? 'اختياري...' : 'Optional...'} /></div>
+          <div><label className={label}>{ar ? 'الوصف' : 'Description'}</label>
+            <textarea value={desc} onChange={(e) => setDesc(e.target.value)} rows={3} className={cn(field, 'resize-none font-medium')} placeholder={ar ? 'اختياري...' : 'Optional...'} /></div>
         </div>
         <button onClick={saveAssign} disabled={!canSave} className="mt-6 w-full md:w-auto inline-flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-brand text-white font-black hover:bg-brand-dark disabled:opacity-50 transition">
           {saving ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}{ar ? 'تعيين' : 'Assign'}
@@ -162,10 +162,10 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
               <div className="flex items-center gap-2 flex-wrap mb-1">
                 <span className={cn("text-[10px] font-black px-2 py-0.5 rounded-md", priorityCls(t.priority))}>{t.priority}</span>
                 <span className={cn("text-[10px] font-black px-2 py-0.5 rounded-md", statusCls(t.status))}>{t.status}</span>
-                {t.task_type && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-brand bg-brand/10">{t.task_type}</span>}
+                {t.title && t.task_type && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-brand bg-brand/10">{t.task_type}</span>}
                 {isOverdue(t) && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-red-600 bg-red-50 dark:bg-red-900/20">{ar ? 'متأخرة' : 'overdue'}</span>}
               </div>
-              <p className="font-black text-zinc-900 dark:text-white">{t.title}</p>
+              <p className="font-black text-zinc-900 dark:text-white">{t.title || t.task_type || (ar ? 'مهمة' : 'Task')}</p>
               {t.description && <p className="text-sm text-zinc-500 font-medium mt-0.5">{t.description}</p>}
               <p className="text-xs text-zinc-400 font-bold mt-1">{ar ? 'من' : 'By'}: {t.assigned_by_name}{t.due_date && <> · {ar ? 'الموعد' : 'Due'}: {formatDate(t.due_date)}</>}</p>
               {t.status === 'Completed' && <p className="text-xs text-emerald-600 font-black mt-1">{ar ? 'الوقت' : 'Time'}: {fmtDur(t.duration_seconds)}{t.note && <span className="text-zinc-400 font-medium"> — {t.note}</span>}</p>}
@@ -217,7 +217,7 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
             {allTasks.length === 0 && <tr><td colSpan={7} className="text-center text-zinc-400 font-bold py-10">{ar ? 'لا توجد مهام' : 'No tasks'}</td></tr>}
             {allTasks.map((t) => (
               <tr key={t.id} className="border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
-                <td className="px-4 py-3"><div className="font-black text-zinc-900 dark:text-white">{t.title}</div>{t.task_type && <span className="inline-block text-[10px] font-black px-1.5 py-0.5 rounded text-brand bg-brand/10 my-0.5">{t.task_type}</span>}{t.description && <div className="text-[11px] text-zinc-400 font-medium truncate max-w-xs">{t.description}</div>}<div className="text-[10px] text-zinc-400 font-bold">{ar ? 'من' : 'by'} {t.assigned_by_name}</div></td>
+                <td className="px-4 py-3"><div className="font-black text-zinc-900 dark:text-white">{t.title || t.task_type || (ar ? 'مهمة' : 'Task')}</div>{t.title && t.task_type && <span className="inline-block text-[10px] font-black px-1.5 py-0.5 rounded text-brand bg-brand/10 my-0.5">{t.task_type}</span>}{t.description && <div className="text-[11px] text-zinc-400 font-medium truncate max-w-xs">{t.description}</div>}<div className="text-[10px] text-zinc-400 font-bold">{ar ? 'من' : 'by'} {t.assigned_by_name}</div></td>
                 <td className="px-3 py-3 font-bold text-zinc-600 dark:text-zinc-300 whitespace-nowrap">{t.assigned_to_name}</td>
                 <td className="px-3 py-3"><span className={cn("text-[11px] font-black px-2 py-0.5 rounded-md", priorityCls(t.priority))}>{t.priority}</span></td>
                 <td className={cn("px-3 py-3 font-bold text-xs whitespace-nowrap", isOverdue(t) ? "text-red-600" : "text-zinc-500")}>{t.due_date ? formatDate(t.due_date) : '—'}{isOverdue(t) && <span className="font-black"> ({ar ? 'متأخرة' : 'overdue'})</span>}</td>

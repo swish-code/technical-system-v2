@@ -3399,7 +3399,7 @@ async function startServer() {
     const dueDate = req.body.due_date || null;
     const requireTime = req.body.require_time_entry !== false;
     const taskType = (req.body.task_type || '').trim() || null;
-    if (!title) return res.status(400).json({ error: "Title is required" });
+    if (!title && !taskType) return res.status(400).json({ error: "Provide a title or a task type" });
     if (!Number.isFinite(assignedTo)) return res.status(400).json({ error: "Assignee is required" });
     const target = await db.get(`SELECT u.id, u.username, r.name AS role FROM users u JOIN roles r ON u.role_id = r.id WHERE u.id = $1`, [assignedTo]) as any;
     if (!target || target.role !== ASSIGNEE_ROLE) return res.status(400).json({ error: "Assignee must be a Technical Back Office employee" });
