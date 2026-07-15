@@ -8374,7 +8374,10 @@ async function startServer() {
       "UPDATE branch_messages SET resolved_at = CURRENT_TIMESTAMP, resolved_by = $1, resolve_reason = $2 WHERE id = $3",
       [user.id, reason, msg.id]
     );
+    // Dismissing clears the ticket — release any agent's in-progress hold on it too.
+    const rel = await db.query(`UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP WHERE ticket_type = 'chat' AND ticket_id = $1 AND status = 'in_progress'`, [msg.id]);
     broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: msg.branch_id });
+    if ((rel.rowCount || 0) > 0) broadcast({ type: "TICKETS_UPDATED" });
     res.json({ success: true });
   });
 
@@ -8702,6 +8705,12 @@ async function startServer() {
       await db.query(`DELETE FROM message_reactions WHERE message_type = $1 AND message_id = $2 AND user_id = $3`, [messageType, messageId, userId]);
     } else {
       await db.query(`INSERT INTO message_reactions (message_type, message_id, user_id, emoji) VALUES ($1, $2, $3, '👍') ON CONFLICT DO NOTHING`, [messageType, messageId, userId]);
+      // A 👍 clears the ticket (counts as answered) — so also release any agent's
+      // in-progress hold on that message, else the assignment stays stuck.
+      if (messageType === 'branch') {
+        const rel = await db.query(`UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP WHERE ticket_type = 'chat' AND ticket_id = $1 AND status = 'in_progress'`, [messageId]);
+        if ((rel.rowCount || 0) > 0) broadcast({ type: "TICKETS_UPDATED" });
+      }
     }
     res.json({ liked: !existing });
     // Tell the thread's viewers to refresh so the like count updates live.
