@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
-import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send } from 'lucide-react';
+import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight } from 'lucide-react';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
 // Talks only to /api/task-* endpoints; independent of the rest of the app.
@@ -51,6 +51,13 @@ export default function TaskView() {
   const [editStatus, setEditStatus] = useState('');
   const [editMinutes, setEditMinutes] = useState<number>(0);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [weekStart, setWeekStart] = useState(() => {
+    const n = new Date();
+    const [y, m, d] = [n.getFullYear(), n.getMonth(), n.getDate()];
+    const dow = new Date(Date.UTC(y, m, d)).getUTCDay();
+    return new Date(Date.UTC(y, m, d - dow)).toISOString().slice(0, 10);
+  });
+  const [weekly, setWeekly] = useState<any[]>([]);
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -72,6 +79,9 @@ export default function TaskView() {
   const fetchHandoffs = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/handoffs?date=${date}`); if (r.ok) { const d = await r.json(); setHandoffs({ transfers: d.transfers || [], releases: d.releases || [] }); } } catch { /* ignore */ }
   };
+  const fetchWeekly = async () => {
+    try { const r = await fetchWithAuth(`${API_URL}/task-logs/weekly?week_start=${weekStart}`); if (r.ok) setWeekly(await r.json()); } catch { /* ignore */ }
+  };
   const fetchSummary = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
@@ -79,6 +89,7 @@ export default function TaskView() {
   useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); }, []);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
   useEffect(() => { fetchSummary(); fetchHandoffs(); }, [date]);
+  useEffect(() => { fetchWeekly(); }, [weekStart]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
   const canSave = !!activityType && !!status && minutes > 0 && !saving;
@@ -105,6 +116,20 @@ export default function TaskView() {
 
   const fmtDur = (s: number) => { const m = Math.round((Number(s) || 0) / 60); return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m`; };
   const hours = (s: any) => ((Number(s) || 0) / 3600).toFixed(1);
+  const isoAddDays = (iso: string, n: number) => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+  const weekDays = Array.from({ length: 7 }, (_, i) => isoAddDays(weekStart, i));
+  const dayName = (iso: string) => (ar ? ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'] : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'])[new Date(iso + 'T00:00:00Z').getUTCDay()];
+  const fmtMD = (iso: string) => iso.slice(5).replace('-', '/');
+  const shiftColor = (s: number) => { const h = (Number(s) || 0) / 3600; return h >= 6 ? 'text-emerald-600' : h >= 3 ? 'text-amber-500' : h > 0 ? 'text-red-500' : 'text-zinc-300 dark:text-zinc-600'; };
+  const weekAgents = (() => {
+    const map: Record<string, { days: Record<string, { seconds: number; cnt: number }>; total: number }> = {};
+    weekly.forEach((r: any) => {
+      if (!map[r.agent_name]) map[r.agent_name] = { days: {}, total: 0 };
+      map[r.agent_name].days[r.day] = { seconds: r.seconds, cnt: r.cnt };
+      map[r.agent_name].total += Number(r.seconds) || 0;
+    });
+    return Object.entries(map).map(([name, v]) => ({ name, days: v.days, total: v.total })).sort((a, b) => b.total - a.total);
+  })();
   const ticketLabel = (t: string) => t === 'chat' ? (ar ? 'مراسلة فاتورة' : 'Invoice Chat') : t === 'busy_branch' ? (ar ? 'فرع مزدحم' : 'Busy Branch') : (ar ? 'إخفاء/إظهار' : 'Hide/Unhide');
 
   // Click a log row to edit its status + time (e.g. flip Open → Completed).
@@ -358,6 +383,49 @@ export default function TaskView() {
               </div>
             ))}
           </div>
+        </div>
+      </div>
+
+      {/* Shift Hours per Agent — weekly grid */}
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+        <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
+          <h3 className="font-black text-zinc-900 dark:text-white flex items-center gap-2"><Clock size={18} className="text-brand" /> {ar ? 'ساعات العمل لكل موظف (أسبوعي)' : 'Shift Hours per Agent'}</h3>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setWeekStart(isoAddDays(weekStart, -7))} className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand transition"><ChevronLeft size={16} /></button>
+            <span className="text-sm font-black text-zinc-700 dark:text-zinc-200 whitespace-nowrap">{fmtMD(weekDays[0])} – {fmtMD(weekDays[6])}</span>
+            <button onClick={() => setWeekStart(isoAddDays(weekStart, 7))} className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand transition"><ChevronRight size={16} /></button>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 dark:border-zinc-800">
+                <th className="text-left px-4 py-2 sticky start-0 bg-white dark:bg-zinc-900 z-10">{ar ? 'الموظف' : 'Agent'}</th>
+                {weekDays.map((d) => <th key={d} colSpan={2} className="text-center px-2 py-2 whitespace-nowrap">{dayName(d)} <span className="text-zinc-300 dark:text-zinc-600">{fmtMD(d)}</span></th>)}
+                <th className="text-center px-3 py-2 text-brand">{ar ? 'الإجمالي' : 'Total'}</th>
+              </tr>
+              <tr className="text-[9px] font-black uppercase tracking-widest text-zinc-300 dark:text-zinc-600 border-b border-zinc-100 dark:border-zinc-800">
+                <th className="sticky start-0 bg-white dark:bg-zinc-900 z-10"></th>
+                {weekDays.map((d) => <React.Fragment key={d}><th className="text-center px-1 py-1">{ar ? 'وقت' : 'Time'}</th><th className="text-center px-1 py-1">{ar ? 'عدد' : 'Count'}</th></React.Fragment>)}
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {weekAgents.length === 0 && <tr><td colSpan={16} className="text-center text-zinc-400 font-bold py-8">{ar ? 'لا توجد بيانات لهذا الأسبوع' : 'No data for this week'}</td></tr>}
+              {weekAgents.map((a) => (
+                <tr key={a.name} className="border-b border-zinc-50 dark:border-zinc-800/50 hover:bg-zinc-50 dark:hover:bg-zinc-800/40">
+                  <td className="px-4 py-2.5 font-black text-zinc-900 dark:text-white whitespace-nowrap sticky start-0 bg-white dark:bg-zinc-900">{a.name}</td>
+                  {weekDays.map((d) => { const c = (a.days as any)[d]; return (
+                    <React.Fragment key={d}>
+                      <td className={cn("text-center px-2 py-2.5 font-bold whitespace-nowrap", c ? shiftColor(c.seconds) : 'text-zinc-300 dark:text-zinc-600')}>{c ? fmtDur(c.seconds) : '—'}</td>
+                      <td className="text-center px-2 py-2.5 text-zinc-400 font-bold">{c ? c.cnt : '—'}</td>
+                    </React.Fragment>
+                  ); })}
+                  <td className="text-center px-3 py-2.5 font-black text-brand whitespace-nowrap">{fmtDur(a.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       </div>
       </div>

@@ -3330,6 +3330,29 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Weekly shift-hours grid: per-agent per-day (Sun..Sat of the given week) time + count.
+  app.get("/api/task-logs/weekly", authenticate, authorize(TASK_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const isAdmin = TASK_ADMIN_ROLES.includes(user.role_name);
+    const weekStart = String(req.query.week_start || '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) return res.status(400).json({ error: "week_start (YYYY-MM-DD) required" });
+    const conds = [
+      `(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $1::date`,
+      `(al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $1::date + 6`,
+    ];
+    const params: any[] = [weekStart];
+    if (!isAdmin) { params.push(user.id); conds.push(`al.agent_id = $${params.length}`); }
+    const rows = await db.all(`
+      SELECT al.agent_name,
+        (al.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date::text AS day,
+        COALESCE(SUM(al.duration_seconds), 0)::int AS seconds,
+        COUNT(*)::int AS cnt
+      FROM activity_logs al
+      WHERE ${conds.join(' AND ')}
+      GROUP BY al.agent_name, day`, params);
+    res.json(rows);
+  });
+
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
     const name = (req.body.name || '').trim();
