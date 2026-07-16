@@ -4,7 +4,7 @@ import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import AssignedTasksView from './AssignedTasksView';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
 // Talks only to /api/task-* endpoints; independent of the rest of the app.
@@ -43,7 +43,7 @@ export default function TaskView() {
   const pageSize = 20;
   const [logs, setLogs] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
-  const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config' | 'assign' | 'mytasks' | 'tracker'>('new');
+  const [tab, setTab] = useState<'new' | 'dash' | 'logs' | 'config' | 'assign' | 'mytasks' | 'tracker' | 'available' | 'recurring'>('new');
 
   // Config editing
   const [newActivity, setNewActivity] = useState('');
@@ -64,6 +64,7 @@ export default function TaskView() {
   });
   const [weekly, setWeekly] = useState<any[]>([]);
   const [myUnseen, setMyUnseen] = useState(0);
+  const [onShift, setOnShift] = useState(false);
 
   const fetchConfig = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-config`); if (r.ok) { const d = await r.json(); setActivities(d.activities || []); setStatuses(d.statuses || []); } } catch { /* ignore */ }
@@ -89,11 +90,15 @@ export default function TaskView() {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/weekly?week_start=${weekStart}`); if (r.ok) setWeekly(await r.json()); } catch { /* ignore */ }
   };
   const fetchMyUnseen = async () => { if (!isAssignee) return; try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/mine`); if (r.ok) { const d = await r.json(); setMyUnseen((d || []).filter((x: any) => !x.seen).length); } } catch { /* ignore */ } };
+  const fetchShift = async () => { if (!isAssignee) return; try { const r = await fetchWithAuth(`${API_URL}/shift/me`); if (r.ok) { const d = await r.json(); setOnShift(!!d.on_shift); } } catch { /* ignore */ } };
+  const toggleShift = async () => {
+    try { const r = await fetchWithAuth(`${API_URL}/shift`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on_shift: !onShift }) }); if (r.ok) { const d = await r.json(); setOnShift(!!d.on_shift); } } catch { /* ignore */ }
+  };
   const fetchSummary = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
 
-  useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); fetchMyUnseen(); }, []);
+  useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); fetchMyUnseen(); fetchShift(); }, []);
   useEffect(() => { if (tab === 'mytasks') setMyUnseen(0); }, [tab]);
   useEffect(() => { if (lastMessage?.type === 'ASSIGNED_TASKS_UPDATED' && tab !== 'mytasks') fetchMyUnseen(); }, [lastMessage]);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
@@ -213,11 +218,21 @@ export default function TaskView() {
         </div>
       )}
 
-      <div>
-        <h1 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
-          <ListChecks className="text-brand" size={26} /> {ar ? 'المهام' : 'Task'}
-        </h1>
-        <p className="text-zinc-500 font-medium text-sm mt-0.5">{ar ? 'سجّل مهامك التقنية وتتبّع وقتك وإنتاجيتك' : 'Log technical tasks and track time & productivity'}</p>
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-3xl font-display font-black text-zinc-900 dark:text-white tracking-tight flex items-center gap-2">
+            <ListChecks className="text-brand" size={26} /> {ar ? 'المهام' : 'Task'}
+          </h1>
+          <p className="text-zinc-500 font-medium text-sm mt-0.5">{ar ? 'سجّل مهامك التقنية وتتبّع وقتك وإنتاجيتك' : 'Log technical tasks and track time & productivity'}</p>
+        </div>
+        {isAssignee && (
+          <button onClick={toggleShift} title={ar ? 'يجب أن تكون على الوردية لسحب المهام المتاحة' : 'You must be On Shift to claim available tasks'}
+            className={cn("inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl text-sm font-black border-2 transition active:scale-95",
+              onShift ? "bg-emerald-500 text-white border-emerald-500" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 border-transparent hover:text-emerald-600")}>
+            <span className={cn("w-2 h-2 rounded-full", onShift ? "bg-white animate-pulse" : "bg-zinc-400")} />
+            {onShift ? (ar ? 'على الوردية' : 'On Shift') : (ar ? 'خارج الوردية' : 'Off Shift')}
+          </button>
+        )}
       </div>
 
       {/* Sub-tabs — each section shows on its own; the form hides when you switch away */}
@@ -226,7 +241,9 @@ export default function TaskView() {
         <TabButton active={tab === 'dash'} onClick={() => setTab('dash')} icon={<Gauge size={16} />}>{ar ? 'الملخص' : 'Overview'}</TabButton>
         <TabButton active={tab === 'logs'} onClick={() => setTab('logs')} icon={<ListChecks size={16} />}>{isAdmin ? (ar ? 'سجلات الفريق' : 'Team Logs') : (ar ? 'سجلاتي' : 'My Logs')}</TabButton>
         {isAssignee && <TabButton active={tab === 'mytasks'} onClick={() => setTab('mytasks')} icon={<ListChecks size={16} />}>{ar ? 'مهامي' : 'My Tasks'}{myUnseen > 0 && <span className="ml-1 min-w-4 h-4 px-1 rounded-full bg-red-500 text-white text-[9px] font-black inline-flex items-center justify-center">{myUnseen}</span>}</TabButton>}
+        {isAssignee && <TabButton active={tab === 'available'} onClick={() => setTab('available')} icon={<Activity size={16} />}>{ar ? 'المهام المتاحة' : 'Available Tasks'}</TabButton>}
         {isManager && <TabButton active={tab === 'assign'} onClick={() => setTab('assign')} icon={<Plus size={16} />}>{ar ? 'تعيين مهمة' : 'Assign Task'}</TabButton>}
+        {isManager && <TabButton active={tab === 'recurring'} onClick={() => setTab('recurring')} icon={<Repeat size={16} />}>{ar ? 'المهام المتكرّرة' : 'Recurring'}</TabButton>}
         {isManager && <TabButton active={tab === 'tracker'} onClick={() => setTab('tracker')} icon={<ClipboardList size={16} />}>{ar ? 'متابعة المهام' : 'Task Tracker'}</TabButton>}
         {isAdmin && <TabButton active={tab === 'config'} onClick={() => setTab('config')} icon={<Settings size={16} />}>{ar ? 'الإعدادات' : 'Configuration'}</TabButton>}
       </div>
@@ -518,6 +535,8 @@ export default function TaskView() {
       {tab === 'assign' && <AssignedTasksView mode="assign" />}
       {tab === 'mytasks' && <AssignedTasksView mode="mytasks" />}
       {tab === 'tracker' && <AssignedTasksView mode="tracker" />}
+      {tab === 'available' && <AssignedTasksView mode="available" onShift={onShift} />}
+      {tab === 'recurring' && <AssignedTasksView mode="recurring" />}
 
       {/* ===== Section 4: Configuration (admins, own tab) ===== */}
       {tab === 'config' && isAdmin && (

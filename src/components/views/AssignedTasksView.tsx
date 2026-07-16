@@ -3,7 +3,7 @@ import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle } from 'lucide-react';
+import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle, Repeat, Calendar, Power } from 'lucide-react';
 
 // Assign Task / My Tasks / Task Tracker — self-contained, rendered as tabs inside TaskView.
 const QUICK = [5, 10, 15, 30, 45, 60];
@@ -12,7 +12,7 @@ const field = "w-full px-4 py-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800 text-sm 
 
 const toLocalInput = (iso: string) => { const d = new Date(iso); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
 
-export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks' | 'tracker' }) {
+export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 'mytasks' | 'tracker' | 'available' | 'recurring'; onShift?: boolean }) {
   const { lang } = useAuth();
   const { fetchWithAuth } = useFetch();
   const lastMessage = useWebSocket();
@@ -89,14 +89,67 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
     try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${t.id}`, { method: 'DELETE' }); if (r.ok) fetchAll(); } catch { /* ignore */ }
   };
 
+  // ---- pool (Available Tasks) ----
+  const [pool, setPool] = useState<any[]>([]);
+  const [claiming, setClaiming] = useState<number | null>(null);
+  const fetchPool = async () => { try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/available`); if (r.ok) setPool(await r.json()); } catch { /* ignore */ } };
+  const claim = async (t: any) => {
+    setClaiming(t.id);
+    try {
+      const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${t.id}/claim`, { method: 'POST' });
+      if (r.ok) setToast({ msg: ar ? 'تم سحب المهمة ✓ — تجدها في «مهامي»' : 'Task claimed ✓ — see it in My Tasks', ok: true });
+      else { const e = await r.json().catch(() => ({})); setToast({ msg: e.error || (ar ? 'فشل' : 'Failed'), ok: false }); }
+      fetchPool();
+    } catch { /* ignore */ } finally { setClaiming(null); }
+  };
+
+  // ---- recurring templates ----
+  const [templates, setTemplates] = useState<any[]>([]);
+  const fetchTemplates = async () => { try { const r = await fetchWithAuth(`${API_URL}/task-templates`); if (r.ok) setTemplates(await r.json()); } catch { /* ignore */ } };
+  const [tId, setTId] = useState<number | null>(null);
+  const [tTitle, setTTitle] = useState(''); const [tDesc, setTDesc] = useState(''); const [tType, setTType] = useState('');
+  const [tRec, setTRec] = useState<'daily' | 'days'>('daily'); const [tDays, setTDays] = useState<number[]>([]);
+  const [tDue, setTDue] = useState('17:00'); const [tPriority, setTPriority] = useState('Medium');
+  const [tMode, setTMode] = useState<'pool' | 'auto'>('pool'); const [tReq, setTReq] = useState(true);
+  const [tSaving, setTSaving] = useState(false);
+  const resetTemplate = () => { setTId(null); setTTitle(''); setTDesc(''); setTType(''); setTRec('daily'); setTDays([]); setTDue('17:00'); setTPriority('Medium'); setTMode('pool'); setTReq(true); };
+  const editTemplate = (t: any) => {
+    setTId(t.id); setTTitle(t.title); setTDesc(t.description || ''); setTType(t.task_type || '');
+    setTRec(t.recurrence === 'days' ? 'days' : 'daily');
+    setTDays(String(t.days || '').split(',').filter(Boolean).map(Number));
+    setTDue(t.due_time || '17:00'); setTPriority(t.priority); setTMode(t.assign_mode === 'auto' ? 'auto' : 'pool'); setTReq(t.require_time_entry !== false);
+  };
+  const saveTemplate = async () => {
+    if (!tTitle.trim() || tSaving) return;
+    if (tRec === 'days' && tDays.length === 0) { setToast({ msg: ar ? 'اختر يوماً واحداً على الأقل' : 'Pick at least one day', ok: false }); return; }
+    setTSaving(true);
+    try {
+      const body = JSON.stringify({ title: tTitle.trim(), description: tDesc.trim() || null, task_type: tType || null, recurrence: tRec, days: tDays, due_time: tDue, priority: tPriority, assign_mode: tMode, require_time_entry: tReq });
+      const r = await fetchWithAuth(`${API_URL}/task-templates${tId ? `/${tId}` : ''}`, { method: tId ? 'PATCH' : 'POST', headers: { 'Content-Type': 'application/json' }, body });
+      if (r.ok) { setToast({ msg: tId ? (ar ? 'تم التعديل ✓' : 'Updated ✓') : (ar ? 'تم إنشاء القالب ✓' : 'Template created ✓'), ok: true }); resetTemplate(); fetchTemplates(); }
+      else { const e = await r.json().catch(() => ({})); setToast({ msg: e.error || (ar ? 'فشل' : 'Failed'), ok: false }); }
+    } catch { /* ignore */ } finally { setTSaving(false); }
+  };
+  const toggleTemplate = async (t: any) => {
+    try { const r = await fetchWithAuth(`${API_URL}/task-templates/${t.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: !t.active }) }); if (r.ok) fetchTemplates(); } catch { /* ignore */ }
+  };
+  const delTemplate = async (t: any) => {
+    if (!window.confirm(ar ? `حذف القالب "${t.title}"؟` : `Delete template "${t.title}"?`)) return;
+    try { const r = await fetchWithAuth(`${API_URL}/task-templates/${t.id}`, { method: 'DELETE' }); if (r.ok) fetchTemplates(); } catch { /* ignore */ }
+  };
+
   useEffect(() => {
     if (mode === 'assign') { fetchAssignees(); fetchActivities(); }
     if (mode === 'mytasks') { fetchMine(); fetchWithAuth(`${API_URL}/assigned-tasks/seen`, { method: 'POST' }).catch(() => {}); }
     if (mode === 'tracker') { fetchAll(); fetchAssignees(); fetchActivities(); }
+    if (mode === 'available') fetchPool();
+    if (mode === 'recurring') { fetchTemplates(); fetchActivities(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode]);
   useEffect(() => {
-    if (lastMessage?.type === 'ASSIGNED_TASKS_UPDATED') { if (mode === 'mytasks') fetchMine(); if (mode === 'tracker') fetchAll(); }
+    if (lastMessage?.type === 'ASSIGNED_TASKS_UPDATED') {
+      if (mode === 'mytasks') fetchMine(); if (mode === 'tracker') fetchAll(); if (mode === 'available') fetchPool();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastMessage]);
 
@@ -195,6 +248,156 @@ export default function AssignedTasksView({ mode }: { mode: 'assign' | 'mytasks'
           </div>
         </div>
       )}
+    </div>);
+  }
+
+  if (mode === 'available') {
+    return (<div className="space-y-3">{Toast}
+      {!onShift && (
+        <div className="rounded-2xl border border-amber-200 dark:border-amber-900/40 bg-amber-50 dark:bg-amber-900/20 p-4 text-sm font-bold text-amber-700 dark:text-amber-400">
+          {ar ? 'يجب أن تكون «على الوردية» لسحب المهام — فعّل المفتاح في أعلى الصفحة.' : 'You must be On Shift to claim tasks — use the toggle at the top of the page.'}
+        </div>
+      )}
+      {pool.length === 0 && <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-12 text-center text-zinc-400 font-bold">{ar ? 'لا توجد مهام متاحة' : 'No available tasks'}</div>}
+      {pool.map((t) => (
+        <div key={t.id} className={cn("bg-white dark:bg-zinc-900 rounded-2xl border p-4 flex items-start justify-between gap-3 flex-wrap", isOverdue(t) ? "border-red-300 dark:border-red-900/50" : "border-zinc-200 dark:border-zinc-800")}>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap mb-1">
+              <span className={cn("text-[10px] font-black px-2 py-0.5 rounded-md", priorityCls(t.priority))}>{t.priority}</span>
+              <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-violet-600 bg-violet-50 dark:bg-violet-900/20">{ar ? 'متاحة' : 'Available'}</span>
+              {t.task_type && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-brand bg-brand/10">{t.task_type}</span>}
+              {isOverdue(t) && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-red-600 bg-red-50 dark:bg-red-900/20">{ar ? 'متأخرة' : 'overdue'}</span>}
+            </div>
+            <p className="font-black text-zinc-900 dark:text-white">{t.title}</p>
+            {t.description && <p className="text-sm text-zinc-500 font-medium mt-0.5">{t.description}</p>}
+            {t.due_date && <p className="text-xs text-zinc-400 font-bold mt-1">{ar ? 'الموعد' : 'Due'}: {formatDate(t.due_date)}</p>}
+          </div>
+          <button onClick={() => claim(t)} disabled={!onShift || claiming === t.id}
+            className="shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-brand text-white text-sm font-black disabled:opacity-50 active:scale-95">
+            {claiming === t.id ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />}{ar ? 'اسحبها' : 'Claim'}
+          </button>
+        </div>
+      ))}
+    </div>);
+  }
+
+  if (mode === 'recurring') {
+    const DOW = ar ? ['أحد', 'إثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'] : ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const now = new Date();
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const lead = new Date(now.getFullYear(), now.getMonth(), 1).getDay();
+    const firesOn = (dow: number) => templates.filter((t: any) => t.active && (t.recurrence !== 'days' || String(t.days || '').split(',').filter(Boolean).map(Number).includes(dow)));
+    return (<div className="space-y-4">{Toast}
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-6 md:p-8">
+        <h2 className="text-xl font-black text-zinc-900 dark:text-white mb-5 flex items-center gap-2"><Repeat className="text-brand" size={20} />{tId ? (ar ? 'تعديل قالب متكرّر' : 'Edit Recurring Template') : (ar ? 'قالب مهمة متكرّرة' : 'New Recurring Template')}</h2>
+        <div className="space-y-4">
+          <div><label className={label}>{ar ? 'العنوان' : 'Title'} <span className="text-brand">*</span></label>
+            <input value={tTitle} onChange={(e) => setTTitle(e.target.value)} className={field} placeholder={ar ? 'عنوان المهمة...' : 'Task title...'} /></div>
+          <div><label className={label}>{ar ? 'الوصف' : 'Description'}</label>
+            <textarea value={tDesc} onChange={(e) => setTDesc(e.target.value)} rows={2} className={cn(field, 'resize-none font-medium')} placeholder={ar ? 'اختياري...' : 'Optional...'} /></div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div><label className={label}>{ar ? 'نوع المهمة' : 'Task Type'}</label>
+              <select value={tType} onChange={(e) => setTType(e.target.value)} className={field}>
+                <option value="">{ar ? '— اختر —' : '— Select —'}</option>
+                {activities.map((a: any) => <option key={a.id} value={a.name}>{a.name}</option>)}
+              </select></div>
+            <div><label className={label}>{ar ? 'وقت التسليم' : 'Due Time'}</label>
+              <input type="time" value={tDue} onChange={(e) => setTDue(e.target.value)} className={field} /></div>
+          </div>
+          <div><label className={label}>{ar ? 'التكرار' : 'Recurrence'}</label>
+            <div className="flex gap-2 mb-2">
+              <button type="button" onClick={() => setTRec('daily')} className={cn('px-4 py-2 rounded-xl text-sm font-black', tRec === 'daily' ? 'bg-brand text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500')}>{ar ? 'يومياً' : 'Daily'}</button>
+              <button type="button" onClick={() => setTRec('days')} className={cn('px-4 py-2 rounded-xl text-sm font-black', tRec === 'days' ? 'bg-brand text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500')}>{ar ? 'أيام محدّدة' : 'Specific days'}</button>
+            </div>
+            {tRec === 'days' && (
+              <div className="flex flex-wrap gap-1.5">
+                {DOW.map((d, i) => (
+                  <button key={i} type="button" onClick={() => setTDays((prev) => prev.includes(i) ? prev.filter((x) => x !== i) : [...prev, i])}
+                    className={cn('px-3 py-1.5 rounded-lg text-xs font-black', tDays.includes(i) ? 'bg-brand text-white' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500')}>{d}</button>
+                ))}
+              </div>
+            )}
+          </div>
+          <div><label className={label}>{ar ? 'الأولوية' : 'Priority'}</label>{priorityBtns(tPriority, setTPriority)}</div>
+          <div><label className={label}>{ar ? 'طريقة التعيين' : 'Assign Mode'}</label>
+            <div className="flex gap-2 flex-wrap">
+              <button type="button" onClick={() => setTMode('pool')} className={cn('px-4 py-2 rounded-xl text-sm font-black', tMode === 'pool' ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 ring-2 ring-violet-400' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500')}>{ar ? 'Pool — يسحبها الموظف' : 'Pool — agents claim'}</button>
+              <button type="button" onClick={() => setTMode('auto')} className={cn('px-4 py-2 rounded-xl text-sm font-black', tMode === 'auto' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 ring-2 ring-emerald-400' : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500')}>{ar ? 'Auto — تعيين تلقائي' : 'Auto — least-loaded'}</button>
+            </div>
+            <p className="text-[11px] text-zinc-400 font-bold mt-1.5">{tMode === 'auto'
+              ? (ar ? 'تُعيَّن تلقائياً لأقل موظف عبئاً «على الوردية». إن لم يكن أحد على الوردية → ترجع للـ Pool.' : 'Auto-assigned to the least-loaded On-Shift agent. Nobody On Shift → falls back to the pool.')
+              : (ar ? 'تظهر في «المهام المتاحة» وأي موظف على الوردية يسحبها.' : 'Shows in Available Tasks; any On-Shift agent can claim it.')}</p>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={tReq} onChange={(e) => setTReq(e.target.checked)} className="w-4 h-4" />
+            <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">{ar ? 'طلب تسجيل الوقت عند الإنهاء' : 'Require time entry to complete'}</span>
+          </label>
+        </div>
+        <div className="flex gap-2 mt-6">
+          <button onClick={saveTemplate} disabled={!tTitle.trim() || tSaving} className="inline-flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-brand text-white font-black hover:bg-brand-dark disabled:opacity-50">
+            {tSaving ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}{tId ? (ar ? 'حفظ' : 'Save') : (ar ? 'إنشاء' : 'Create')}
+          </button>
+          {tId && <button onClick={resetTemplate} className="px-6 py-3 rounded-2xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 font-black">{ar ? 'إلغاء' : 'Cancel'}</button>}
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
+        <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800"><h3 className="font-black text-zinc-900 dark:text-white">{ar ? 'القوالب' : 'Templates'}</h3></div>
+        <div className="divide-y divide-zinc-50 dark:divide-zinc-800/50">
+          {templates.length === 0 && <p className="text-center text-zinc-400 font-bold py-10">{ar ? 'لا توجد قوالب' : 'No templates'}</p>}
+          {templates.map((t: any) => (
+            <div key={t.id} className={cn("p-4 flex items-start justify-between gap-3 flex-wrap", !t.active && "opacity-50")}>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap mb-1">
+                  <span className={cn("text-[10px] font-black px-2 py-0.5 rounded-md", priorityCls(t.priority))}>{t.priority}</span>
+                  <span className={cn("text-[10px] font-black px-2 py-0.5 rounded-md", t.assign_mode === 'auto' ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-900/20" : "text-violet-600 bg-violet-50 dark:bg-violet-900/20")}>{t.assign_mode === 'auto' ? 'Auto' : 'Pool'}</span>
+                  {t.task_type && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-brand bg-brand/10">{t.task_type}</span>}
+                  {!t.active && <span className="text-[10px] font-black px-2 py-0.5 rounded-md text-zinc-500 bg-zinc-100 dark:bg-zinc-800">{ar ? 'موقوف' : 'paused'}</span>}
+                </div>
+                <p className="font-black text-zinc-900 dark:text-white">{t.title}</p>
+                <p className="text-xs text-zinc-400 font-bold mt-0.5">
+                  {t.recurrence === 'days' ? String(t.days || '').split(',').filter(Boolean).map((d: string) => DOW[Number(d)]).join(' · ') : (ar ? 'يومياً' : 'Daily')} · {t.due_time || '23:59'}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button onClick={() => toggleTemplate(t)} title={t.active ? (ar ? 'إيقاف' : 'Pause') : (ar ? 'تفعيل' : 'Activate')}
+                  className={cn("p-1.5 rounded-lg", t.active ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-400")}><Power size={14} /></button>
+                <button onClick={() => editTemplate(t)} className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand"><Pencil size={14} /></button>
+                <button onClick={() => delTemplate(t)} className="p-1.5 rounded-lg bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-red-500"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 p-5">
+        <h3 className="font-black text-zinc-900 dark:text-white mb-3 flex items-center gap-2"><Calendar size={18} className="text-brand" />{ar ? 'تقويم الشهر — ما سيُطلق كل يوم' : 'This month — what fires each day'}</h3>
+        <div className="grid grid-cols-7 gap-1">
+          {DOW.map((d) => <div key={d} className="text-[10px] font-black uppercase tracking-widest text-zinc-400 py-1 text-center">{d}</div>)}
+          {Array.from({ length: lead }).map((_, i) => <div key={`pad${i}`} />)}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1;
+            const dow = new Date(now.getFullYear(), now.getMonth(), day).getDay();
+            const fires = firesOn(dow);
+            const isToday = day === now.getDate();
+            return (
+              <div key={day} className={cn("min-h-16 rounded-lg border p-1", isToday ? "border-brand bg-brand/5" : "border-zinc-100 dark:border-zinc-800")}>
+                <div className={cn("text-[10px] font-black", isToday ? "text-brand" : "text-zinc-400")}>{day}</div>
+                <div className="space-y-0.5 mt-0.5">
+                  {fires.slice(0, 3).map((t: any) => (
+                    <div key={t.id} title={t.title} className={cn("text-[8px] font-black px-1 py-0.5 rounded truncate", t.assign_mode === 'auto' ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30" : "bg-violet-100 text-violet-700 dark:bg-violet-900/30")}>{t.title}</div>
+                  ))}
+                  {fires.length > 3 && <div className="text-[8px] font-bold text-zinc-400">+{fires.length - 3}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-3 mt-3 text-[10px] font-black text-zinc-500">
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-emerald-400" />Auto</span>
+          <span className="flex items-center gap-1"><span className="w-2.5 h-2.5 rounded bg-violet-400" />Pool</span>
+        </div>
+      </div>
     </div>);
   }
 

@@ -957,9 +957,11 @@ async function initDb() {
     assigned_by INTEGER NOT NULL,
     assigned_by_name TEXT NOT NULL,
     assigned_to INTEGER NOT NULL,
-    assigned_to_name TEXT NOT NULL,
+    assigned_to_name TEXT,
     department TEXT,
     task_type TEXT,
+    template_id INTEGER,
+    task_date DATE,
     priority TEXT NOT NULL DEFAULT 'Medium',
     due_date TIMESTAMP,
     status TEXT NOT NULL DEFAULT 'New',
@@ -973,6 +975,30 @@ async function initDb() {
   );
   CREATE INDEX IF NOT EXISTS idx_assigned_tasks_to ON assigned_tasks(assigned_to, status);
   CREATE INDEX IF NOT EXISTS idx_assigned_tasks_by ON assigned_tasks(assigned_by, created_at DESC);
+
+  -- Recurring task templates: a Manager defines a task that auto-generates ONE
+  -- instance per matching day (Kuwait). assign_mode 'pool' -> status 'Available'
+  -- (any On-Shift TBO agent can Claim it); 'auto' -> assigned to the least-loaded
+  -- On-Shift agent, falling back to the pool when nobody is On Shift.
+  CREATE TABLE IF NOT EXISTS task_templates (
+    id SERIAL PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT,
+    department TEXT DEFAULT 'Technical Back Office',
+    task_type TEXT,
+    recurrence TEXT NOT NULL DEFAULT 'daily',   -- 'daily' | 'days'
+    days TEXT,                                  -- CSV of 0..6 (Sun..Sat) when recurrence='days'
+    due_time TEXT DEFAULT '17:00',
+    priority TEXT NOT NULL DEFAULT 'Medium',
+    assign_mode TEXT NOT NULL DEFAULT 'pool',   -- 'pool' | 'auto'
+    require_time_entry BOOLEAN DEFAULT true,
+    active BOOLEAN DEFAULT true,
+    created_by INTEGER,
+    created_by_name TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  -- One instance per template per day: the guard that makes generation idempotent.
+  CREATE UNIQUE INDEX IF NOT EXISTS uniq_template_day ON assigned_tasks(template_id, task_date) WHERE template_id IS NOT NULL;
 
   -- Ticket workflow: an agent PICKS a hide/busy/chat ticket (single assignment),
   -- does the work on the aggregators, then marks it DONE — which records the
@@ -3419,6 +3445,141 @@ async function startServer() {
   const ASSIGN_MANAGER_ROLES = ["Manager"];
   const ASSIGNEE_ROLE = "Technical Back Office";
 
+  // ---- Shift flag (self-service). Pool claiming + auto-assignment depend on it. ----
+  app.get("/api/shift/me", authenticate, async (req, res) => {
+    const u = (req as any).user;
+    res.json({ on_shift: !!u.on_shift, on_shift_at: u.on_shift_at || null });
+  });
+  app.post("/api/shift", authenticate, async (req, res) => {
+    const u = (req as any).user;
+    const on = !!req.body.on_shift;
+    await db.query(`UPDATE users SET on_shift = $1, on_shift_at = CASE WHEN $1 THEN CURRENT_TIMESTAMP ELSE on_shift_at END WHERE id = $2`, [on, u.id]);
+    res.json({ success: true, on_shift: on });
+  });
+
+  // ---- Recurring templates -> one instance per matching Kuwait day (lazy, no cron) ----
+  // Idempotent: the uniq_template_day index means a concurrent call can't double-create.
+  const ensureTodayInstances = async () => {
+    try {
+      const now = await db.get(`SELECT (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date::text AS d,
+        EXTRACT(DOW FROM (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait'))::int AS dow`) as any;
+      const templates = await db.all(`SELECT * FROM task_templates WHERE active = true`) as any[];
+      for (const t of templates) {
+        if (t.recurrence === 'days') {
+          const days = String(t.days || '').split(',').filter(Boolean).map(Number);
+          if (!days.includes(Number(now.dow))) continue;
+        }
+        const exists = await db.get(`SELECT 1 FROM assigned_tasks WHERE template_id = $1 AND task_date = $2`, [t.id, now.d]);
+        if (exists) continue;
+        // 'auto' -> least-loaded On-Shift agent; nobody On Shift -> fall back to the pool.
+        let assignee: any = null;
+        if (t.assign_mode === 'auto') {
+          assignee = await db.get(`
+            SELECT u.id, u.username FROM users u
+            JOIN roles r ON u.role_id = r.id
+            LEFT JOIN assigned_tasks a ON a.assigned_to = u.id AND a.status <> 'Completed'
+            WHERE r.name = $1 AND u.is_active = 1 AND u.on_shift = true
+            GROUP BY u.id, u.username ORDER BY COUNT(a.id) ASC, u.id ASC LIMIT 1`, [ASSIGNEE_ROLE]) as any;
+        }
+        try {
+          await db.query(`
+            INSERT INTO assigned_tasks (title, description, assigned_by, assigned_by_name, assigned_to, assigned_to_name,
+              department, task_type, template_id, task_date, priority, due_date, status, require_time_entry, seen)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::date,$11,
+              (($10 || ' ' || COALESCE($12,'23:59'))::timestamp AT TIME ZONE 'Asia/Kuwait'), $13, $14, false)`,
+            [t.title, t.description, t.created_by, t.created_by_name || 'System', assignee?.id || null, assignee?.username || null,
+             ASSIGNEE_ROLE, t.task_type, t.id, now.d, t.priority, t.due_time, assignee ? 'New' : 'Available', t.require_time_entry !== false]);
+          if (assignee) {
+            broadcast({ type: "ASSIGNED_TASKS_UPDATED", user_id: assignee.id });
+            sendPushToUser(assignee.id, { title: "مهمة جديدة مُعيّنة لك", body: t.title, tag: "assigned-task", data: { type: "ASSIGNED_TASK" } });
+          } else {
+            broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
+          }
+        } catch (e) { /* uniq_template_day -> another request generated it first */ }
+      }
+    } catch (e) { console.error("ensureTodayInstances failed", e); }
+  };
+
+  app.get("/api/task-templates", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (_req, res) => {
+    const rows = await db.all(`SELECT * FROM task_templates ORDER BY active DESC, id DESC`);
+    res.json(rows);
+  });
+
+  const parseTemplateBody = (body: any, prev?: any) => {
+    const title = (body.title ?? prev?.title ?? '').trim();
+    const recurrence = body.recurrence === 'days' ? 'days' : 'daily';
+    const days = recurrence === 'days'
+      ? (Array.isArray(body.days) ? body.days.map((d: any) => Number(d)).filter((d: number) => d >= 0 && d <= 6).join(',') : (prev?.days || ''))
+      : null;
+    const priority = ['High', 'Medium', 'Low'].includes(body.priority) ? body.priority : (prev?.priority || 'Medium');
+    const assign_mode = body.assign_mode === 'auto' ? 'auto' : 'pool';
+    const due_time = /^\d{1,2}:\d{2}$/.test(body.due_time || '') ? body.due_time : (prev?.due_time || '17:00');
+    return {
+      title, recurrence, days, priority, assign_mode, due_time,
+      description: (body.description ?? prev?.description ?? '')?.trim() || null,
+      task_type: (body.task_type ?? prev?.task_type ?? '')?.trim() || null,
+      require_time_entry: body.require_time_entry !== false,
+    };
+  };
+
+  app.post("/api/task-templates", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    const user = (req as any).user;
+    const t = parseTemplateBody(req.body);
+    if (!t.title) return res.status(400).json({ error: "Title is required" });
+    if (t.recurrence === 'days' && !t.days) return res.status(400).json({ error: "Pick at least one day" });
+    const ins = await db.query(`
+      INSERT INTO task_templates (title, description, department, task_type, recurrence, days, due_time, priority, assign_mode, require_time_entry, active, created_by, created_by_name)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true,$11,$12) RETURNING id`,
+      [t.title, t.description, ASSIGNEE_ROLE, t.task_type, t.recurrence, t.days, t.due_time, t.priority, t.assign_mode, t.require_time_entry, user.id, user.username]);
+    await ensureTodayInstances();
+    res.json({ id: ins.rows[0].id, success: true });
+  });
+
+  app.patch("/api/task-templates/:id", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    const id = Number(req.params.id);
+    const prev = await db.get(`SELECT * FROM task_templates WHERE id = $1`, [id]) as any;
+    if (!prev) return res.status(404).json({ error: "Template not found" });
+    // Active-only payload = the on/off switch in the list.
+    if (typeof req.body.active === 'boolean' && Object.keys(req.body).length === 1) {
+      await db.query(`UPDATE task_templates SET active = $1 WHERE id = $2`, [req.body.active, id]);
+      return res.json({ success: true });
+    }
+    const t = parseTemplateBody(req.body, prev);
+    if (!t.title) return res.status(400).json({ error: "Title is required" });
+    if (t.recurrence === 'days' && !t.days) return res.status(400).json({ error: "Pick at least one day" });
+    await db.query(`
+      UPDATE task_templates SET title=$1, description=$2, task_type=$3, recurrence=$4, days=$5, due_time=$6,
+        priority=$7, assign_mode=$8, require_time_entry=$9, active=$10 WHERE id=$11`,
+      [t.title, t.description, t.task_type, t.recurrence, t.days, t.due_time, t.priority, t.assign_mode, t.require_time_entry,
+       typeof req.body.active === 'boolean' ? req.body.active : prev.active, id]);
+    res.json({ success: true });
+  });
+
+  app.delete("/api/task-templates/:id", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
+    await db.query(`DELETE FROM task_templates WHERE id = $1`, [Number(req.params.id)]);
+    res.json({ success: true });
+  });
+
+  // Pool: today's unclaimed instances. Any On-Shift TBO agent can take one.
+  app.get("/api/assigned-tasks/available", authenticate, async (_req, res) => {
+    await ensureTodayInstances();
+    const rows = await db.all(`SELECT * FROM assigned_tasks WHERE status = 'Available' AND assigned_to IS NULL ORDER BY COALESCE(due_date, created_at) ASC`);
+    res.json(rows);
+  });
+
+  // Claim: atomic (WHERE status='Available') so two agents can't take the same task.
+  app.post("/api/assigned-tasks/:id/claim", authenticate, async (req, res) => {
+    const user = (req as any).user;
+    if (user.role_name !== ASSIGNEE_ROLE) return res.status(403).json({ error: "Only Technical Back Office can claim tasks" });
+    if (!user.on_shift) return res.status(400).json({ error: "You must be On Shift to claim a task" });
+    const claimed = await db.get(`
+      UPDATE assigned_tasks SET assigned_to = $1, assigned_to_name = $2, status = 'New', seen = true, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3 AND status = 'Available' AND assigned_to IS NULL RETURNING id`, [user.id, user.username, Number(req.params.id)]) as any;
+    if (!claimed) return res.status(409).json({ error: "Task was already taken by another agent" });
+    broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
+    res.json({ success: true });
+  });
+
   app.get("/api/assigned-tasks/assignees", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (_req, res) => {
     const rows = await db.all(`SELECT u.id, u.username FROM users u JOIN roles r ON u.role_id = r.id WHERE r.name = $1 AND u.is_active = 1 ORDER BY u.username`, [ASSIGNEE_ROLE]);
     res.json(rows);
@@ -3450,6 +3611,7 @@ async function startServer() {
 
   app.get("/api/assigned-tasks/mine", authenticate, async (req, res) => {
     const user = (req as any).user;
+    await ensureTodayInstances();
     const rows = await db.all(`SELECT * FROM assigned_tasks WHERE assigned_to = $1 ORDER BY (status='Completed'), COALESCE(due_date, created_at) ASC`, [user.id]);
     res.json(rows);
   });
@@ -3485,6 +3647,7 @@ async function startServer() {
   });
 
   app.get("/api/assigned-tasks", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (_req, res) => {
+    await ensureTodayInstances();
     const rows = await db.all(`SELECT * FROM assigned_tasks ORDER BY (status='Completed'), COALESCE(due_date, created_at) ASC`);
     res.json(rows);
   });
@@ -4324,6 +4487,16 @@ async function startServer() {
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN reply_to_id INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE assigned_tasks ADD COLUMN task_type TEXT"); } catch (e) {}
+  // Recurring-task support on an already-deployed assigned_tasks table.
+  try { await db.exec("ALTER TABLE assigned_tasks ADD COLUMN template_id INTEGER"); } catch (e) {}
+  try { await db.exec("ALTER TABLE assigned_tasks ADD COLUMN task_date DATE"); } catch (e) {}
+  // Pool tasks have no assignee until claimed.
+  try { await db.exec("ALTER TABLE assigned_tasks ALTER COLUMN assigned_to DROP NOT NULL"); } catch (e) {}
+  try { await db.exec("ALTER TABLE assigned_tasks ALTER COLUMN assigned_to_name DROP NOT NULL"); } catch (e) {}
+  try { await db.exec("CREATE UNIQUE INDEX IF NOT EXISTS uniq_template_day ON assigned_tasks(template_id, task_date) WHERE template_id IS NOT NULL"); } catch (e) {}
+  // Self-service shift flag — drives Pool claiming + auto-assignment.
+  try { await db.exec("ALTER TABLE users ADD COLUMN on_shift BOOLEAN DEFAULT false"); } catch (e) {}
+  try { await db.exec("ALTER TABLE users ADD COLUMN on_shift_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolved_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN resolve_reason TEXT"); } catch (e) {}
   // Per-message ticket clearing: a restaurant message leaves the tickets list
