@@ -1000,6 +1000,23 @@ async function initDb() {
   -- One instance per template per day: the guard that makes generation idempotent.
   CREATE UNIQUE INDEX IF NOT EXISTS uniq_template_day ON assigned_tasks(template_id, task_date) WHERE template_id IS NOT NULL;
 
+  -- Automated restaurant notifications posted into each branch's own chat thread.
+  -- Per-branch opt-out for the hourly hidden-items alert (the restaurant owns this).
+  CREATE TABLE IF NOT EXISTS branch_notify_settings (
+    branch_id INTEGER PRIMARY KEY,
+    hidden_hourly BOOLEAN DEFAULT true,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  -- Send ledger: the ONLY thing preventing duplicate alerts (hourly / daily / 30-min).
+  CREATE TABLE IF NOT EXISTS branch_notify_log (
+    id SERIAL PRIMARY KEY,
+    branch_id INTEGER NOT NULL,
+    kind TEXT NOT NULL,          -- 'hidden_hourly' | 'hidden_daily' | 'busy_open'
+    ref TEXT,                    -- busy record id, or the Kuwait date for the daily report
+    sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+  CREATE INDEX IF NOT EXISTS idx_branch_notify_log ON branch_notify_log(branch_id, kind, sent_at DESC);
+
   -- Ticket workflow: an agent PICKS a hide/busy/chat ticket (single assignment),
   -- does the work on the aggregators, then marks it DONE — which records the
   -- action (via applyPendingRequest for hide/busy) and auto-logs a task with
@@ -1252,6 +1269,14 @@ try {
   for (let i = 0; i < taskStatuses.length; i++) {
     await db.query("INSERT INTO cc_status (name, counts_time, sort_order) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING", [taskStatuses[i][0], taskStatuses[i][1], i]);
   }
+
+  // Author for automated chat messages. Inactive + unusable password: it can never
+  // log in, and every user-picker filters on is_active = 1 so it stays out of lists.
+  try {
+    await db.query(`INSERT INTO users (username, password_hash, role_id, is_active)
+      SELECT 'System', '!no-login', (SELECT id FROM roles WHERE name = 'Manager' LIMIT 1), 0
+      WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'System')`);
+  } catch (e) { console.error("System user seed skipped:", e); }
 
   // v2: removed hardcoded "Super Visor" / "supervisor123" seed. Create via bootstrap SQL.
 
@@ -3676,6 +3701,98 @@ async function startServer() {
     res.json({ success: true });
   });
   // =================== end Assigned Tasks ===================
+
+  // ============ Automated restaurant alerts -> the branch's own chat thread ============
+  // Posted as the inactive 'System' user with sender_role='System'. That role is not
+  // 'Restaurants', so it lands in the restaurant's unread (they see it) but never bumps
+  // the office badge, is never treated as a ticket, and clears nothing.
+  const postSystemMessage = async (brandId: number, branchId: number, text: string) => {
+    const sys = await db.get(`SELECT id FROM users WHERE username = 'System' LIMIT 1`) as any;
+    if (!sys) return;
+    await db.query(`INSERT INTO branch_messages (brand_id, branch_id, sender_id, sender_role, comment) VALUES ($1,$2,$3,'System',$4)`, [brandId, branchId, sys.id, text]);
+    broadcast({ type: "BRANCH_CHAT_UPDATED", branch_id: branchId });
+  };
+
+  // A branch's hidden items = hides for that branch + brand-wide hides (branch_id IS NULL).
+  const HIDDEN_JOIN = `
+    FROM branches b
+    JOIN brands br ON br.id = b.brand_id
+    JOIN hidden_items hi ON (hi.branch_id = b.id OR (hi.branch_id IS NULL AND hi.brand_id = b.brand_id))
+    JOIN products p ON p.id = hi.product_id`;
+
+  const runBranchNotifications = async () => {
+    try {
+      // (1) Items hidden > 1h — respects the branch's opt-out, at most once per hour.
+      const hourly = await db.all(`
+        SELECT b.id AS branch_id, b.brand_id, string_agg(DISTINCT p.name, '، ') AS items, COUNT(DISTINCT p.id)::int AS n
+        ${HIDDEN_JOIN}
+        WHERE hi.created_at <= CURRENT_TIMESTAMP - INTERVAL '1 hour'
+          AND COALESCE((SELECT s.hidden_hourly FROM branch_notify_settings s WHERE s.branch_id = b.id), true) = true
+          AND NOT EXISTS (SELECT 1 FROM branch_notify_log l WHERE l.branch_id = b.id AND l.kind = 'hidden_hourly'
+                          AND l.sent_at > CURRENT_TIMESTAMP - INTERVAL '1 hour')
+        GROUP BY b.id, b.brand_id`) as any[];
+      for (const r of hourly) {
+        await postSystemMessage(r.brand_id, r.branch_id, `⚠️ تنبيه: يوجد ${r.n} صنف مخفي منذ أكثر من ساعة:\n${r.items}\n\nيُرجى المراجعة وإعادة تفعيلها إن أمكن.`);
+        await db.query(`INSERT INTO branch_notify_log (branch_id, kind) VALUES ($1,'hidden_hourly')`, [r.branch_id]);
+      }
+
+      // (2) Daily 9:00 (Kuwait) report of everything currently hidden — once per day.
+      const kw = await db.get(`SELECT EXTRACT(HOUR FROM (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait'))::int AS h,
+        (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date::text AS d`) as any;
+      if (Number(kw?.h) === 9) {
+        const daily = await db.all(`
+          SELECT b.id AS branch_id, b.brand_id, string_agg(DISTINCT p.name, '، ') AS items, COUNT(DISTINCT p.id)::int AS n
+          ${HIDDEN_JOIN}
+          WHERE NOT EXISTS (SELECT 1 FROM branch_notify_log l WHERE l.branch_id = b.id AND l.kind = 'hidden_daily' AND l.ref = $1)
+          GROUP BY b.id, b.brand_id`, [kw.d]) as any[];
+        for (const r of daily) {
+          await postSystemMessage(r.brand_id, r.branch_id, `📋 تقرير الأصناف المخفية — ${kw.d}\n\n${r.items}\n\nالإجمالي: ${r.n} صنف.`);
+          await db.query(`INSERT INTO branch_notify_log (branch_id, kind, ref) VALUES ($1,'hidden_daily',$2)`, [r.branch_id, kw.d]);
+        }
+      }
+
+      // (3) Busy with NO end time (open-ended) — remind every 30 min until it's ended.
+      // busy_period_records stores brand/branch as names; end_time='' means still active.
+      const busy = await db.all(`
+        SELECT bp.id, bp.start_time, bp.reason_category, b.id AS branch_id, b.brand_id
+        FROM busy_period_records bp
+        JOIN brands br ON br.name = bp.brand
+        JOIN branches b ON b.name = bp.branch AND b.brand_id = br.id
+        WHERE bp.end_time = '' AND bp.timer_expires_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM branch_notify_log l WHERE l.branch_id = b.id AND l.kind = 'busy_open'
+                          AND l.ref = bp.id::text AND l.sent_at > CURRENT_TIMESTAMP - INTERVAL '30 minutes')`) as any[];
+      for (const r of busy) {
+        await postSystemMessage(r.brand_id, r.branch_id, `🔴 تذكير: الفرع ما زال في حالة Busy بدون وقت انتهاء منذ ${r.start_time}.\nالسبب: ${r.reason_category}\n\nيُرجى إنهاء الحالة عند العودة للعمل.`);
+        await db.query(`INSERT INTO branch_notify_log (branch_id, kind, ref) VALUES ($1,'busy_open',$2)`, [r.branch_id, String(r.id)]);
+      }
+    } catch (e) { console.error("runBranchNotifications failed", e); }
+  };
+  // One 5-minute tick drives all three; the send ledger enforces the real cadence
+  // (hourly / once-a-day / every 30 min), so a restart can't cause a duplicate burst.
+  setInterval(runBranchNotifications, 5 * 60 * 1000);
+
+  // Notification control — the restaurant owns its own branch's setting.
+  const settingsBranchId = (req: any, bodyOrQuery: any) =>
+    req.user.role_name === 'Restaurants' ? Number(req.user.branch_id) : Number(bodyOrQuery.branch_id);
+
+  app.get("/api/branch-notify-settings", authenticate, async (req, res) => {
+    const branchId = settingsBranchId(req as any, req.query);
+    if (!Number.isFinite(branchId) || !branchId) return res.status(400).json({ error: "branch_id required" });
+    const s = await db.get(`SELECT hidden_hourly FROM branch_notify_settings WHERE branch_id = $1`, [branchId]) as any;
+    res.json({ branch_id: branchId, hidden_hourly: s ? !!s.hidden_hourly : true });
+  });
+
+  app.post("/api/branch-notify-settings", authenticate, async (req, res) => {
+    const user = (req as any).user;
+    const branchId = settingsBranchId(req as any, req.body);
+    if (!Number.isFinite(branchId) || !branchId) return res.status(400).json({ error: "branch_id required" });
+    // A restaurant may only ever change its own branch; office roles may set any.
+    if (user.role_name === 'Restaurants' && branchId !== Number(user.branch_id)) return res.status(403).json({ error: "Not allowed" });
+    const on = !!req.body.hidden_hourly;
+    await db.query(`INSERT INTO branch_notify_settings (branch_id, hidden_hourly, updated_at) VALUES ($1,$2,CURRENT_TIMESTAMP)
+      ON CONFLICT (branch_id) DO UPDATE SET hidden_hourly = $2, updated_at = CURRENT_TIMESTAMP`, [branchId, on]);
+    res.json({ success: true, hidden_hourly: on });
+  });
 
   // Config editing (managers only) — add/remove activities and statuses.
   app.post("/api/task-config/activity", authenticate, authorize(TASK_ADMIN_ROLES), async (req, res) => {
