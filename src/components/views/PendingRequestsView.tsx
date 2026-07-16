@@ -76,15 +76,29 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     setReplyImages((prev) => { const n = { ...prev }; delete n[ticketId]; return n; });
     setReplyPreviews((prev) => { const n = { ...prev }; delete n[ticketId]; return n; });
   };
-  const pickReplyImage = async (ticketId: number, e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = '';
-    if (!f) return;
+  const attachReplyFile = async (ticketId: number, f: File) => {
     if (f.size > 50 * 1024 * 1024) { alert(lang === 'en' ? 'File too large — max 50MB' : 'الملف كبير جدًا — الحد الأقصى 50 ميجابايت'); return; }
     const picked = await compressImage(f);
     const preview = await new Promise<string>((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result as string); r.readAsDataURL(picked); });
     setReplyImages((prev) => ({ ...prev, [ticketId]: picked }));
     setReplyPreviews((prev) => ({ ...prev, [ticketId]: preview }));
+  };
+  const pickReplyImage = async (ticketId: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (f) await attachReplyFile(ticketId, f);
+  };
+  // Ctrl+V a screenshot straight into the reply box (same as the chat composer).
+  const pasteReplyImage = (ticketId: number, e: React.ClipboardEvent) => {
+    const items = e.clipboardData?.items;
+    if (!items) return;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.startsWith('image/')) {
+        const f = items[i].getAsFile();
+        if (f) { e.preventDefault(); attachReplyFile(ticketId, f); }
+        break;
+      }
+    }
   };
 
   // Pagination state
@@ -817,7 +831,8 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                       value={replyDrafts[t.id] || ''}
                       onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
                       onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && isMine('chat', t.id)) { e.preventDefault(); doneTicket('chat', t.id, t.branch_id); } }}
-                      placeholder={lang === 'en' ? 'Type a reply (@ to mention), then Send & Done…' : 'اكتب ردًا (@ للمنشن) ثم اضغط إرسال وإنهاء…'}
+                      onPaste={(e) => pasteReplyImage(t.id, e)}
+                      placeholder={lang === 'en' ? 'Type a reply (@ mention · Ctrl+V a photo), then Send & Done…' : 'اكتب ردًا (@ للمنشن · Ctrl+V للصق صورة) ثم اضغط إرسال وإنهاء…'}
                       className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white"
                     />
                   </div>
