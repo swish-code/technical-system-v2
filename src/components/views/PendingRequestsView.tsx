@@ -67,6 +67,7 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const [chatTickets, setChatTickets] = useState<any[]>([]);
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
   const [sendingReplyId, setSendingReplyId] = useState<number | null>(null);
+  const [chatUsers, setChatUsers] = useState<any[]>([]);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -266,10 +267,38 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
     } catch { /* ignore */ } finally { setSendingReplyId(null); }
   };
 
+  // @mention autocomplete for the inline reply box — same user source as the Chat
+  // page. The server notifies anyone @mentioned when the reply is sent.
+  const fetchChatUsers = async () => {
+    try { const r = await fetchWithAuth(`${API_URL}/chat-users`); if (r.ok) setChatUsers(await r.json()); } catch { /* ignore */ }
+  };
+  const insertMention = (ticketId: number, username: string) => {
+    setReplyDrafts((prev) => ({ ...prev, [ticketId]: (prev[ticketId] || '').replace(/@([\w-]*)$/, `@${username} `) }));
+  };
+  const renderMentionBox = (ticketId: number) => {
+    const m = (replyDrafts[ticketId] || '').match(/@([\w-]*)$/);
+    if (!m) return null;
+    const q = m[1].toLowerCase();
+    const results = chatUsers.filter((u: any) => (u.username || '').toLowerCase().includes(q)).slice(0, 6);
+    if (!results.length) return null;
+    return (
+      <div className="mb-2 max-h-44 overflow-y-auto rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-lg">
+        {results.map((u: any) => (
+          <button key={u.id} onClick={() => insertMention(ticketId, u.username)}
+            className="w-full text-left px-3 py-2 hover:bg-brand/10 transition flex items-center justify-between gap-2">
+            <span className="text-sm font-black text-zinc-900 dark:text-white truncate">@{u.username}</span>
+            <span className="text-[9px] font-bold text-zinc-400 uppercase tracking-tight truncate">{u.role_name}</span>
+          </button>
+        ))}
+      </div>
+    );
+  };
+
   useEffect(() => {
     fetchRequests();
     fetchTickets();
     fetchTicketState();
+    fetchChatUsers();
   }, []);
 
   useEffect(() => {
@@ -744,14 +773,17 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                 {/* Reply box — its text is sent when the holder clicks "Send & Done".
                     There is NO standalone Send: replying without closing used to leave
                     the agent's assignment stuck in_progress (couldn't pick again). */}
-                <div className="flex items-center gap-2">
-                  <input
-                    value={replyDrafts[t.id] || ''}
-                    onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && isMine('chat', t.id)) { e.preventDefault(); doneTicket('chat', t.id, t.branch_id); } }}
-                    placeholder={lang === 'en' ? 'Type a reply, then press Send & Done…' : 'اكتب ردًا ثم اضغط إرسال وإنهاء…'}
-                    className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white"
-                  />
+                <div>
+                  {renderMentionBox(t.id)}
+                  <div className="flex items-center gap-2">
+                    <input
+                      value={replyDrafts[t.id] || ''}
+                      onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
+                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && isMine('chat', t.id)) { e.preventDefault(); doneTicket('chat', t.id, t.branch_id); } }}
+                      placeholder={lang === 'en' ? 'Type a reply (@ to mention), then Send & Done…' : 'اكتب ردًا (@ للمنشن) ثم اضغط إرسال وإنهاء…'}
+                      className="flex-1 min-w-0 px-4 py-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-800 text-sm font-medium outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white"
+                    />
+                  </div>
                 </div>
               </div>
             ))}
