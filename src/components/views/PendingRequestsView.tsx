@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate, safeJson } from '../../lib/utils';
-import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare, Send, Play, CheckCheck, ArrowRightLeft, Undo2, Timer } from 'lucide-react';
+import { CheckCircle2, XCircle, Clock, User, AlertCircle, Eye, Check, X, Loader2, Download, RefreshCw, ChevronLeft, ChevronRight, MessageSquare, Send, Play, CheckCheck, ArrowRightLeft, Undo2, Timer, Paperclip } from 'lucide-react';
+import { compressImage } from '../../lib/imageCompress';
 import { motion, AnimatePresence } from 'motion/react';
 import { PendingRequest } from '../../types';
 import * as XLSX from 'xlsx';
@@ -68,6 +69,23 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   const [replyDrafts, setReplyDrafts] = useState<Record<number, string>>({});
   const [sendingReplyId, setSendingReplyId] = useState<number | null>(null);
   const [chatUsers, setChatUsers] = useState<any[]>([]);
+  // Optional photo attached to a ticket's reply (keyed by ticket id).
+  const [replyImages, setReplyImages] = useState<Record<number, File>>({});
+  const [replyPreviews, setReplyPreviews] = useState<Record<number, string>>({});
+  const clearReplyImage = (ticketId: number) => {
+    setReplyImages((prev) => { const n = { ...prev }; delete n[ticketId]; return n; });
+    setReplyPreviews((prev) => { const n = { ...prev }; delete n[ticketId]; return n; });
+  };
+  const pickReplyImage = async (ticketId: number, e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (f.size > 50 * 1024 * 1024) { alert(lang === 'en' ? 'File too large — max 50MB' : 'الملف كبير جدًا — الحد الأقصى 50 ميجابايت'); return; }
+    const picked = await compressImage(f);
+    const preview = await new Promise<string>((resolve) => { const r = new FileReader(); r.onloadend = () => resolve(r.result as string); r.readAsDataURL(picked); });
+    setReplyImages((prev) => ({ ...prev, [ticketId]: picked }));
+    setReplyPreviews((prev) => ({ ...prev, [ticketId]: preview }));
+  };
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -168,17 +186,23 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
   // message and the ticket clears, then records the task + closes the assignment.
   const doneTicket = async (type: string, id: number, branchId?: number) => {
     if (type === 'chat' && branchId) {
-      const text = (replyDrafts[id] || '').trim() || 'تم إنجاز طلبك ✅';
+      const typed = (replyDrafts[id] || '').trim();
+      const img = replyImages[id];
+      // A photo can stand alone — only fall back to the auto text when there is
+      // neither a typed reply nor an attachment.
+      const text = typed || (img ? '' : 'تم إنجاز طلبك ✅');
       setSendingReplyId(id);
       try {
         const fd = new FormData();
         fd.append('branch_id', String(branchId));
-        fd.append('comment', text);
+        if (text) fd.append('comment', text);
+        if (img) fd.append('image', img);
         // The ticket IS the store's message, so quote it: the reply lands in the chat
         // as a quoted reply to that exact message instead of a loose one.
         fd.append('reply_to_id', String(id));
         await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
         setReplyDrafts((prev) => { const n = { ...prev }; delete n[id]; return n; });
+        clearReplyImage(id);
       } catch { /* ignore */ } finally { setSendingReplyId(null); }
     }
     return ticketAction('done', { ticket_type: type, ticket_id: id }, type);
@@ -778,7 +802,17 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
                     the agent's assignment stuck in_progress (couldn't pick again). */}
                 <div>
                   {renderMentionBox(t.id)}
+                  {replyPreviews[t.id] && (
+                    <div className="relative w-20 h-20 mb-2 rounded-xl overflow-hidden border-2 border-brand/20">
+                      <img src={replyPreviews[t.id]} alt="preview" className="w-full h-full object-cover" />
+                      <button onClick={() => clearReplyImage(t.id)} className="absolute top-1 right-1 p-1 bg-zinc-900/70 text-white rounded-lg"><X size={12} /></button>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
+                    <label className="shrink-0 cursor-pointer p-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-500 hover:text-brand transition" title={lang === 'en' ? 'Attach a photo' : 'إرفاق صورة'}>
+                      <Paperclip size={18} />
+                      <input type="file" accept="image/*" className="hidden" onChange={(e) => pickReplyImage(t.id, e)} />
+                    </label>
                     <input
                       value={replyDrafts[t.id] || ''}
                       onChange={(e) => setReplyDrafts((prev) => ({ ...prev, [t.id]: e.target.value }))}
