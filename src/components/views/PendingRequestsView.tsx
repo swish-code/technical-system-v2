@@ -174,6 +174,9 @@ export default function PendingRequestsView({ filterType }: PendingRequestsViewP
         const fd = new FormData();
         fd.append('branch_id', String(branchId));
         fd.append('comment', text);
+        // The ticket IS the store's message, so quote it: the reply lands in the chat
+        // as a quoted reply to that exact message instead of a loose one.
+        fd.append('reply_to_id', String(id));
         await fetchWithAuth(`${API_URL}/branch-chat`, { method: 'POST', body: fd });
         setReplyDrafts((prev) => { const n = { ...prev }; delete n[id]; return n; });
       } catch { /* ignore */ } finally { setSendingReplyId(null); }
