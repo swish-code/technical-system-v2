@@ -3720,8 +3720,28 @@ async function startServer() {
     JOIN hidden_items hi ON (hi.branch_id = b.id OR (hi.branch_id IS NULL AND hi.brand_id = b.brand_id))
     JOIN products p ON p.id = hi.product_id`;
 
+  // Safety net: release any ticket hold whose ticket is no longer open (answered
+  // elsewhere, liked, dismissed, or a hide/busy that's no longer Pending). The
+  // per-path releases + claim auto-heal already cover the common cases; this makes
+  // sure nobody stays stuck longer than one 5-min tick, with no manual DB fixes.
+  const releaseStaleHolds = async () => {
+    try {
+      const r = await db.query(`
+        UPDATE ticket_assignments ta SET status='released', done_at=CURRENT_TIMESTAMP
+        WHERE ta.status='in_progress' AND (
+          CASE WHEN ta.ticket_type='chat' THEN
+            NOT EXISTS (SELECT 1 FROM branch_messages bm
+              WHERE bm.id=ta.ticket_id AND bm.sender_role='Restaurants' AND bm.resolved_at IS NULL AND bm.cleared_at IS NULL
+                AND NOT EXISTS (SELECT 1 FROM message_reactions mr WHERE mr.message_type='branch' AND mr.message_id=bm.id))
+          ELSE NOT EXISTS (SELECT 1 FROM pending_requests pr WHERE pr.id=ta.ticket_id AND pr.status='Pending')
+          END)`);
+      if ((r.rowCount || 0) > 0) { console.log(`releaseStaleHolds: freed ${r.rowCount}`); broadcast({ type: "TICKETS_UPDATED" }); }
+    } catch (e) { console.error("releaseStaleHolds failed", e); }
+  };
+
   const runBranchNotifications = async () => {
     try {
+      await releaseStaleHolds();
       // (1) Items hidden > 1h — respects the branch's opt-out, at most once per hour.
       const hourly = await db.all(`
         SELECT b.id AS branch_id, b.brand_id, string_agg(DISTINCT p.name, '، ') AS items, COUNT(DISTINCT p.id)::int AS n
