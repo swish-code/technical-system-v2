@@ -35,7 +35,8 @@ export default function TaskView() {
   // Data
   const today = new Date().toISOString().slice(0, 10);
   const weekAgo = new Date(Date.now() - 6 * 86400000).toISOString().slice(0, 10);
-  const [date, setDate] = useState(today);
+  const [dashFrom, setDashFrom] = useState(weekAgo);
+  const [dashTo, setDashTo] = useState(today);
   const [dateFrom, setDateFrom] = useState(weekAgo);
   const [dateTo, setDateTo] = useState(today);
   const [page, setPage] = useState(1);
@@ -84,7 +85,7 @@ export default function TaskView() {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/agents`); if (r.ok) setAgents(await r.json()); } catch { /* ignore */ }
   };
   const fetchHandoffs = async () => {
-    try { const r = await fetchWithAuth(`${API_URL}/task-logs/handoffs?date=${date}`); if (r.ok) { const d = await r.json(); setHandoffs({ transfers: d.transfers || [], releases: d.releases || [] }); } } catch { /* ignore */ }
+    try { const r = await fetchWithAuth(`${API_URL}/task-logs/handoffs?date_from=${dashFrom}&date_to=${dashTo}`); if (r.ok) { const d = await r.json(); setHandoffs({ transfers: d.transfers || [], releases: d.releases || [] }); } } catch { /* ignore */ }
   };
   const fetchWeekly = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/weekly?week_start=${weekStart}`); if (r.ok) setWeekly(await r.json()); } catch { /* ignore */ }
@@ -95,14 +96,14 @@ export default function TaskView() {
     try { const r = await fetchWithAuth(`${API_URL}/shift`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ on_shift: !onShift }) }); if (r.ok) { const d = await r.json(); setOnShift(!!d.on_shift); } } catch { /* ignore */ }
   };
   const fetchSummary = async () => {
-    try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date=${date}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
+    try { const r = await fetchWithAuth(`${API_URL}/task-logs/summary?date_from=${dashFrom}&date_to=${dashTo}`); if (r.ok) setSummary(await r.json()); } catch { /* ignore */ }
   };
 
   useEffect(() => { fetchConfig(); fetchBrands(); if (isAdmin) fetchAgents(); fetchMyUnseen(); fetchShift(); }, []);
   useEffect(() => { if (tab === 'mytasks') setMyUnseen(0); }, [tab]);
   useEffect(() => { if (lastMessage?.type === 'ASSIGNED_TASKS_UPDATED' && tab !== 'mytasks') fetchMyUnseen(); }, [lastMessage]);
   useEffect(() => { fetchLogs(); }, [dateFrom, dateTo, agentId, page]);
-  useEffect(() => { fetchSummary(); fetchHandoffs(); }, [date]);
+  useEffect(() => { fetchSummary(); fetchHandoffs(); }, [dashFrom, dashTo]);
   useEffect(() => { fetchWeekly(); }, [weekStart]);
   useEffect(() => { if (toast) { const t = setTimeout(() => setToast(null), 3000); return () => clearTimeout(t); } }, [toast]);
 
@@ -319,9 +320,15 @@ export default function TaskView() {
       {tab === 'dash' && (
       <div className="space-y-6">
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        <h2 className="font-black text-zinc-900 dark:text-white flex items-center gap-2"><Gauge className="text-brand" size={18} /> {ar ? 'ملخص اليوم' : 'Overview'}</h2>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
-          className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+        <h2 className="font-black text-zinc-900 dark:text-white flex items-center gap-2"><Gauge className="text-brand" size={18} /> {ar ? 'الملخص' : 'Overview'}</h2>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-black uppercase tracking-widest text-zinc-400">{ar ? 'من' : 'From'}</span>
+          <input type="date" value={dashFrom} max={dashTo} onChange={(e) => setDashFrom(e.target.value)}
+            className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+          <span className="text-xs font-black uppercase tracking-widest text-zinc-400">{ar ? 'إلى' : 'To'}</span>
+          <input type="date" value={dashTo} min={dashFrom} onChange={(e) => setDashTo(e.target.value)}
+            className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
+        </div>
       </div>
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         <StatCard icon={<ListChecks size={18} />} label={ar ? 'إجمالي المهام' : 'Total Tasks'} value={summary?.totals?.total_tasks ?? 0} />
@@ -381,7 +388,7 @@ export default function TaskView() {
             <span className="min-w-6 h-6 px-2 rounded-full bg-brand/10 text-brand text-xs font-black flex items-center justify-center">{handoffs.transfers.length}</span>
           </div>
           <div className="space-y-1.5 max-h-56 overflow-y-auto">
-            {handoffs.transfers.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد تحويلات في هذا اليوم' : 'No transfers this day'}</p>}
+            {handoffs.transfers.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد تحويلات في هذه الفترة' : 'No transfers in this range'}</p>}
             {handoffs.transfers.map((h: any) => (
               <div key={h.id} className="flex items-center justify-between gap-2 text-sm border-b border-zinc-50 dark:border-zinc-800 py-1.5">
                 <span className="font-bold text-zinc-700 dark:text-zinc-300 truncate min-w-0">
@@ -401,7 +408,7 @@ export default function TaskView() {
             <span className="min-w-6 h-6 px-2 rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-600 text-xs font-black flex items-center justify-center">{handoffs.releases.length}</span>
           </div>
           <div className="space-y-1.5 max-h-56 overflow-y-auto">
-            {handoffs.releases.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد إرجاعات في هذا اليوم' : 'No releases this day'}</p>}
+            {handoffs.releases.length === 0 && <p className="text-zinc-400 text-xs font-bold py-4 text-center">{ar ? 'لا توجد إرجاعات في هذه الفترة' : 'No releases in this range'}</p>}
             {handoffs.releases.map((h: any) => (
               <div key={h.id} className="flex items-center justify-between gap-2 text-sm border-b border-zinc-50 dark:border-zinc-800 py-1.5">
                 <span className="font-bold text-zinc-700 dark:text-zinc-300 truncate min-w-0">

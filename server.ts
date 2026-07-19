@@ -3404,6 +3404,8 @@ async function startServer() {
     if (!isAdmin) { params.push(user.id); conds.push(`ta.assigned_to = $${params.length}`); }
     else if (req.query.agent_id) { params.push(Number(req.query.agent_id)); conds.push(`ta.assigned_to = $${params.length}`); }
     if (req.query.date) { params.push(req.query.date); conds.push(`(ta.done_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date = $${params.length}`); }
+    if (req.query.date_from) { params.push(req.query.date_from); conds.push(`(ta.done_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date >= $${params.length}`); }
+    if (req.query.date_to) { params.push(req.query.date_to); conds.push(`(ta.done_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date <= $${params.length}`); }
     const rows = await db.all(`
       SELECT ta.id, ta.ticket_type, ta.ticket_id, ta.status, ta.done_at,
         u.username AS by_name, b.name AS brand_name,
