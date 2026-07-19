@@ -969,6 +969,7 @@ async function initDb() {
     duration_seconds INTEGER,
     note TEXT,
     require_time_entry BOOLEAN DEFAULT true,
+    started_at TIMESTAMP,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     completed_at TIMESTAMP
@@ -3615,7 +3616,7 @@ async function startServer() {
     if (user.role_name !== ASSIGNEE_ROLE) return res.status(403).json({ error: "Only Technical Back Office can claim tasks" });
     if (!user.on_shift) return res.status(400).json({ error: "You must be On Shift to claim a task" });
     const claimed = await db.get(`
-      UPDATE assigned_tasks SET assigned_to = $1, assigned_to_name = $2, status = 'New', seen = true, updated_at = CURRENT_TIMESTAMP
+      UPDATE assigned_tasks SET assigned_to = $1, assigned_to_name = $2, status = 'New', seen = true, started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       WHERE id = $3 AND status = 'Available' AND assigned_to IS NULL RETURNING id`, [user.id, user.username, Number(req.params.id)]) as any;
     if (!claimed) return res.status(409).json({ error: "Task was already taken by another agent" });
     broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
@@ -3673,16 +3674,28 @@ async function startServer() {
     if (!t) return res.status(404).json({ error: "Task not found" });
     if (t.assigned_to !== user.id) return res.status(403).json({ error: "Not your task" });
     if (status === 'Completed') {
-      const minutes = Math.round(Number(req.body.minutes) || 0);
       const note = (req.body.note || '').trim() || null;
-      if (t.require_time_entry && minutes <= 0) return res.status(400).json({ error: "Time (minutes > 0) is required to complete this task" });
-      const durationSeconds = minutes > 0 ? minutes * 60 : 0;
-      await db.query(`UPDATE assigned_tasks SET status='Completed', completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, duration_seconds=$1, note=$2, seen=true WHERE id=$3`, [durationSeconds, note, id]);
+      // Time is tracked automatically: elapsed wall-clock from started_at (set at
+      // claim, or first Start for directly-assigned tasks) to now. Manual minutes
+      // are only a fallback for tasks that predate auto-tracking (no started_at).
+      const fallbackSeconds = Math.max(0, Math.round(Number(req.body.minutes) || 0) * 60);
+      const done = await db.query(`
+        UPDATE assigned_tasks
+        SET status='Completed', completed_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP, seen=true, note=$2,
+            duration_seconds = CASE
+              WHEN started_at IS NOT NULL THEN GREATEST(1, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - started_at))::int)
+              ELSE $1 END
+        WHERE id=$3 RETURNING duration_seconds`, [fallbackSeconds, note, id]);
+      const durationSeconds = Number(done.rows[0]?.duration_seconds) || 0;
       if (durationSeconds > 0) {
         await db.query(`INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, notes, agent_id, agent_name) VALUES ('technical','Technical',$1,'Completed',$2,$3,$4,$5)`, [t.task_type || 'Assigned Task', durationSeconds, t.title, user.id, user.username]);
       }
     } else {
-      await db.query(`UPDATE assigned_tasks SET status=$1, updated_at=CURRENT_TIMESTAMP, seen=true WHERE id=$2`, [status, id]);
+      // Starting work stamps started_at once (covers directly-assigned tasks that
+      // were never claimed from the pool); claimed tasks already have it set.
+      await db.query(`UPDATE assigned_tasks SET status=$1, updated_at=CURRENT_TIMESTAMP, seen=true,
+        started_at = CASE WHEN started_at IS NULL AND $1 = 'In Progress' THEN CURRENT_TIMESTAMP ELSE started_at END
+        WHERE id=$2`, [status, id]);
     }
     broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
     res.json({ success: true });
@@ -4642,6 +4655,9 @@ async function startServer() {
   try {
     await db.exec("ALTER TABLE late_order_requests ADD COLUMN manager_responded_at TIMESTAMP");
   } catch (e) {}
+  // Auto time-tracking for assigned tasks: the clock starts at claim (or first
+  // Start for directly-assigned tasks) and duration is computed at completion.
+  try { await db.exec("ALTER TABLE assigned_tasks ADD COLUMN started_at TIMESTAMP"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status TEXT DEFAULT 'pending'"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_by INTEGER"); } catch (e) {}
   try { await db.exec("ALTER TABLE branch_messages ADD COLUMN status_at TIMESTAMP"); } catch (e) {}

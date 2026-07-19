@@ -3,11 +3,10 @@ import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle, Repeat, Calendar, Power, Download } from 'lucide-react';
+import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle, Repeat, Calendar, Power, Download, Clock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 // Assign Task / My Tasks / Task Tracker — self-contained, rendered as tabs inside TaskView.
-const QUICK = [5, 10, 15, 30, 45, 60];
 const label = "block text-sm font-bold text-zinc-700 dark:text-zinc-300 mb-2";
 const field = "w-full px-4 py-3 rounded-2xl bg-zinc-50 dark:bg-zinc-800 text-sm font-bold outline-none border-2 border-transparent focus:border-brand text-zinc-900 dark:text-white";
 
@@ -49,22 +48,30 @@ export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 
   const [myTasks, setMyTasks] = useState<any[]>([]);
   const fetchMine = async () => { try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/mine`); if (r.ok) setMyTasks(await r.json()); } catch { /* ignore */ } };
   const [completeTask, setCompleteTask] = useState<any | null>(null);
-  const [cMinutes, setCMinutes] = useState(0);
   const [cNote, setCNote] = useState('');
   const [cSaving, setCSaving] = useState(false);
+  // Live ticking clock so claimed/in-progress tasks show elapsed time counting up.
+  const [nowTs, setNowTs] = useState(Date.now());
+  useEffect(() => { if (mode !== 'mytasks') return; const id = setInterval(() => setNowTs(Date.now()), 1000); return () => clearInterval(id); }, [mode]);
+  const fmtElapsed = (startIso: string) => {
+    const s = Math.max(0, Math.floor((nowTs - new Date(startIso).getTime()) / 1000));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    const p = (n: number) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${p(m)}:${p(sec)}` : `${p(m)}:${p(sec)}`;
+  };
   const setStatus = async (t: any, status: string) => {
     try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${t.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status }) }); if (r.ok) fetchMine(); } catch { /* ignore */ }
   };
   const openComplete = (t: any) => {
     if (t.due_date && new Date(t.due_date).getTime() > Date.now() && !window.confirm(ar ? 'المهمة لم يحن موعدها بعد. هل أنت متأكد من الإنهاء؟' : "This task isn't due yet. Complete anyway?")) return;
-    setCompleteTask(t); setCMinutes(0); setCNote('');
+    setCompleteTask(t); setCNote('');
   };
   const saveComplete = async () => {
     if (!completeTask || cSaving) return;
-    if (completeTask.require_time_entry && cMinutes <= 0) { setToast({ msg: ar ? 'أدخل الوقت (دقائق > 0)' : 'Enter time (minutes > 0)', ok: false }); return; }
     setCSaving(true);
     try {
-      const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${completeTask.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'Completed', minutes: cMinutes, note: cNote.trim() || null }) });
+      // Time is recorded automatically (elapsed since claim/start); only the note is sent.
+      const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${completeTask.id}/status`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'Completed', note: cNote.trim() || null }) });
       if (r.ok) { setToast({ msg: ar ? 'تم الإنجاز ✓' : 'Completed ✓', ok: true }); setCompleteTask(null); fetchMine(); }
       else { const e = await r.json().catch(() => ({})); setToast({ msg: e.error || (ar ? 'فشل' : 'Failed'), ok: false }); }
     } catch { setToast({ msg: ar ? 'فشل' : 'Failed', ok: false }); } finally { setCSaving(false); }
@@ -253,6 +260,7 @@ export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 
               {t.description && <p className="text-sm text-zinc-500 font-medium mt-0.5">{t.description}</p>}
               <p className="text-xs text-zinc-400 font-bold mt-1">{ar ? 'من' : 'By'}: {t.assigned_by_name}{t.due_date && <> · {ar ? 'الموعد' : 'Due'}: {formatDate(t.due_date)}</>}</p>
               {t.status === 'Completed' && <p className="text-xs text-emerald-600 font-black mt-1">{ar ? 'الوقت' : 'Time'}: {fmtDur(t.duration_seconds)}{t.note && <span className="text-zinc-400 font-medium"> — {t.note}</span>}</p>}
+              {t.status !== 'Completed' && t.started_at && <p className="text-xs text-amber-600 font-black mt-1 tabular-nums inline-flex items-center gap-1"><Clock size={12} />{ar ? 'الوقت المنقضي' : 'Elapsed'}: {fmtElapsed(t.started_at)}</p>}
             </div>
             <div className="flex items-center gap-2 shrink-0">
               {t.status === 'New' && <button onClick={() => setStatus(t, 'In Progress')} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-500 text-white text-sm font-black active:scale-95"><Play size={14} />{ar ? 'ابدأ' : 'Start'}</button>}
@@ -266,9 +274,12 @@ export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 
           <div className="bg-white dark:bg-zinc-900 rounded-3xl p-6 w-full max-w-sm shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="font-black text-zinc-900 dark:text-white mb-0.5">{ar ? 'إنهاء المهمة' : 'Complete Task'}</h3>
             <p className="text-zinc-400 text-sm font-bold mb-4 truncate">{completeTask.title}</p>
-            <label className={label}>{ar ? 'الوقت المستغرق (دقائق)' : 'Time Spent (minutes)'}{completeTask.require_time_entry && <span className="text-brand"> *</span>}</label>
-            <input type="number" min={0} value={cMinutes || ''} onChange={(e) => setCMinutes(Math.max(0, Number(e.target.value)))} className={field} placeholder={ar ? 'مثال: 15' : 'e.g. 15'} />
-            <div className="flex flex-wrap gap-2 mt-2.5">{QUICK.map((m) => <button key={m} type="button" onClick={() => setCMinutes(m)} className={cn("px-3 py-1.5 rounded-lg text-xs font-black", cMinutes === m ? "bg-brand text-white" : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500")}>{m}m</button>)}</div>
+            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-800 mb-1">
+              <Clock size={15} className="text-amber-600 shrink-0" />
+              <span className="text-xs font-black text-amber-700 dark:text-amber-300 tabular-nums">
+                {ar ? 'الوقت المسجّل تلقائياً' : 'Time recorded automatically'}: {completeTask.started_at ? fmtElapsed(completeTask.started_at) : '—'}
+              </span>
+            </div>
             <div className="h-4" />
             <label className={label}>{ar ? 'ملاحظة الإنجاز' : 'Completion Note'}</label>
             <textarea value={cNote} onChange={(e) => setCNote(e.target.value)} rows={2} className={cn(field, 'resize-none font-medium')} placeholder={ar ? 'اختياري...' : 'Optional...'} />
