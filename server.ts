@@ -1000,6 +1000,15 @@ async function initDb() {
   -- One instance per template per day: the guard that makes generation idempotent.
   CREATE UNIQUE INDEX IF NOT EXISTS uniq_template_day ON assigned_tasks(template_id, task_date) WHERE template_id IS NOT NULL;
 
+  -- Tombstone: when a manager deletes a recurring instance, remember it for that
+  -- day so ensureTodayInstances() doesn't immediately regenerate it. A new day
+  -- (new task_date) has no skip row, so recurrence resumes normally.
+  CREATE TABLE IF NOT EXISTS assigned_task_skips (
+    template_id INTEGER NOT NULL,
+    task_date DATE NOT NULL,
+    PRIMARY KEY (template_id, task_date)
+  );
+
   -- Automated restaurant notifications posted into each branch's own chat thread.
   -- Per-branch opt-out for the hourly hidden-items alert (the restaurant owns this).
   CREATE TABLE IF NOT EXISTS branch_notify_settings (
@@ -3496,7 +3505,13 @@ async function startServer() {
           const days = String(t.days || '').split(',').filter(Boolean).map(Number);
           if (!days.includes(Number(now.dow))) continue;
         }
-        const exists = await db.get(`SELECT 1 FROM assigned_tasks WHERE template_id = $1 AND task_date = $2`, [t.id, now.d]);
+        // Skip if an instance already exists for today OR the manager deleted
+        // today's instance (tombstone), so a deleted recurring task stays deleted.
+        const exists = await db.get(`
+          SELECT 1 FROM assigned_tasks WHERE template_id = $1 AND task_date = $2
+          UNION ALL
+          SELECT 1 FROM assigned_task_skips WHERE template_id = $1 AND task_date = $2
+          LIMIT 1`, [t.id, now.d]);
         if (exists) continue;
         // 'auto' -> least-loaded On-Shift agent; nobody On Shift -> fall back to the pool.
         let assignee: any = null;
@@ -3698,7 +3713,14 @@ async function startServer() {
   });
 
   app.delete("/api/assigned-tasks/:id", authenticate, authorize(ASSIGN_MANAGER_ROLES), async (req, res) => {
-    await db.query(`DELETE FROM assigned_tasks WHERE id = $1`, [Number(req.params.id)]);
+    const id = Number(req.params.id);
+    // If this was a recurring instance, tombstone template+day BEFORE deleting so
+    // the lazy generator won't recreate it on the very next list fetch.
+    const t = await db.get(`SELECT template_id, task_date FROM assigned_tasks WHERE id = $1`, [id]) as any;
+    if (t?.template_id && t?.task_date) {
+      await db.query(`INSERT INTO assigned_task_skips (template_id, task_date) VALUES ($1, $2) ON CONFLICT DO NOTHING`, [t.template_id, t.task_date]);
+    }
+    await db.query(`DELETE FROM assigned_tasks WHERE id = $1`, [id]);
     broadcast({ type: "ASSIGNED_TASKS_UPDATED" });
     res.json({ success: true });
   });

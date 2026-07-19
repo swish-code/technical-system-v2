@@ -3,7 +3,8 @@ import { useAuth } from '../../context/AuthContext';
 import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle, Repeat, Calendar, Power } from 'lucide-react';
+import { Send, Loader2, Play, CheckCheck, Pencil, Trash2, Plus, CheckCircle2, XCircle, Repeat, Calendar, Power, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 // Assign Task / My Tasks / Task Tracker — self-contained, rendered as tabs inside TaskView.
 const QUICK = [5, 10, 15, 30, 45, 60];
@@ -86,7 +87,37 @@ export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 
   };
   const del = async (t: any) => {
     if (!window.confirm(ar ? `حذف المهمة "${t.title}"؟` : `Delete task "${t.title}"?`)) return;
-    try { const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${t.id}`, { method: 'DELETE' }); if (r.ok) fetchAll(); } catch { /* ignore */ }
+    try {
+      const r = await fetchWithAuth(`${API_URL}/assigned-tasks/${t.id}`, { method: 'DELETE' });
+      if (r.ok) { setToast({ msg: ar ? 'تم الحذف ✓' : 'Deleted ✓', ok: true }); fetchAll(); }
+      else { const e = await r.json().catch(() => ({})); setToast({ msg: e.error || (ar ? 'فشل الحذف' : 'Delete failed'), ok: false }); }
+    } catch { setToast({ msg: ar ? 'فشل الحذف' : 'Delete failed', ok: false }); }
+  };
+  // Export the full task list (all columns) to an Excel file.
+  const exportTasks = () => {
+    const rows = (allTasks || []).map((t: any) => ({
+      ID: t.id,
+      Title: t.title || '',
+      Type: t.task_type || '',
+      Description: t.description || '',
+      Status: t.status || '',
+      Priority: t.priority || '',
+      Assignee: t.assigned_to_name || '',
+      'Assigned By': t.assigned_by_name || '',
+      Department: t.department || '',
+      Recurring: t.template_id ? 'Yes' : 'No',
+      'Task Date': t.task_date || '',
+      'Due Date': t.due_date ? formatDate(t.due_date) : '',
+      'Created At': t.created_at ? formatDate(t.created_at) : '',
+      'Completed At': t.completed_at ? formatDate(t.completed_at) : '',
+      'Duration (min)': t.duration_seconds ? Math.round(Number(t.duration_seconds) / 60) : '',
+      Note: t.note || '',
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tasks');
+    const today = new Date().toISOString().slice(0, 10);
+    XLSX.writeFile(wb, `tasks-${today}.xlsx`);
   };
 
   // ---- pool (Available Tasks) ----
@@ -404,7 +435,13 @@ export default function AssignedTasksView({ mode, onShift }: { mode: 'assign' | 
   // tracker
   return (<div>{Toast}
     <div className="bg-white dark:bg-zinc-900 rounded-3xl border border-zinc-200 dark:border-zinc-800 overflow-hidden">
-      <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800"><h2 className="font-black text-zinc-900 dark:text-white">{ar ? 'متابعة المهام' : 'Task Tracker'}</h2></div>
+      <div className="px-5 py-4 border-b border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-3">
+        <h2 className="font-black text-zinc-900 dark:text-white">{ar ? 'متابعة المهام' : 'Task Tracker'}</h2>
+        <button onClick={exportTasks} disabled={allTasks.length === 0}
+          className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-brand text-white text-sm font-black disabled:opacity-50 active:scale-95 transition">
+          <Download size={15} />{ar ? 'تنزيل Excel' : 'Export Excel'}
+        </button>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead><tr className="text-[10px] font-black uppercase tracking-widest text-zinc-400 border-b border-zinc-100 dark:border-zinc-800">
