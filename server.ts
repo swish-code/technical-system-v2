@@ -3371,10 +3371,14 @@ async function startServer() {
     const page = Math.max(1, Number(req.query.page) || 1);
     const offset = (page - 1) * pageSize;
     const totalRow = await db.get(`SELECT COUNT(*)::int AS n FROM activity_logs al ${where}`, params);
+    // Export mode (?all=1): return every matching row (capped for safety) so the
+    // client can build a full Excel file, not just the current page.
+    const wantAll = req.query.all === '1' || req.query.all === 'true';
+    const limitClause = wantAll ? `LIMIT 100000` : `LIMIT ${pageSize} OFFSET ${offset}`;
     const rows = await db.all(
       `SELECT al.id, al.activity_type, al.status, al.duration_seconds, al.notes, al.agent_name, al.created_at, b.name AS brand_name
        FROM activity_logs al LEFT JOIN brands b ON al.brand_id = b.id
-       ${where} ORDER BY al.created_at DESC LIMIT ${pageSize} OFFSET ${offset}`, params);
+       ${where} ORDER BY al.created_at DESC ${limitClause}`, params);
     res.json({ logs: rows, total: (totalRow?.n ?? 0), page, pageSize });
   });
 

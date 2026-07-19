@@ -4,7 +4,8 @@ import { API_URL, cn, formatDate } from '../../lib/utils';
 import { useFetch } from '../../hooks/useFetch';
 import AssignedTasksView from './AssignedTasksView';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight, Repeat } from 'lucide-react';
+import { Plus, Clock, Settings, Trash2, ListChecks, Activity, Gauge, CheckCircle2, XCircle, Loader2, ChevronDown, ClipboardList, Send, ChevronLeft, ChevronRight, Repeat, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 // Self-contained "Task" page — New Technical Log form + stats + logs + config.
 // Talks only to /api/task-* endpoints; independent of the rest of the app.
@@ -83,6 +84,36 @@ export default function TaskView() {
   };
   const fetchAgents = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/agents`); if (r.ok) setAgents(await r.json()); } catch { /* ignore */ }
+  };
+  // Export ALL logs for the current filters (date range + employee) to Excel —
+  // not just the visible page. Uses ?all=1 so the server returns every match.
+  const [exportingLogs, setExportingLogs] = useState(false);
+  const exportLogs = async () => {
+    if (exportingLogs) return;
+    setExportingLogs(true);
+    try {
+      const qs = new URLSearchParams({ date_from: dateFrom, date_to: dateTo, all: '1' });
+      if (agentId) qs.set('agent_id', agentId);
+      const r = await fetchWithAuth(`${API_URL}/task-logs?${qs.toString()}`);
+      if (!r.ok) throw new Error('fetch failed');
+      const d = await r.json();
+      const rows = (d.logs || []).map((l: any) => ({
+        ID: l.id,
+        Task: l.activity_type || '',
+        Status: l.status || '',
+        'Duration (min)': l.duration_seconds ? Math.round(Number(l.duration_seconds) / 60) : '',
+        Brand: l.brand_name || '',
+        Employee: l.agent_name || '',
+        When: l.created_at ? formatDate(l.created_at) : '',
+        Notes: l.notes || '',
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Team Logs');
+      XLSX.writeFile(wb, `team-logs-${dateFrom}_to_${dateTo}.xlsx`);
+    } catch {
+      setToast({ msg: ar ? 'فشل التصدير' : 'Export failed', ok: false });
+    } finally { setExportingLogs(false); }
   };
   const fetchHandoffs = async () => {
     try { const r = await fetchWithAuth(`${API_URL}/task-logs/handoffs?date_from=${dashFrom}&date_to=${dashTo}`); if (r.ok) { const d = await r.json(); setHandoffs({ transfers: d.transfers || [], releases: d.releases || [] }); } } catch { /* ignore */ }
@@ -487,6 +518,10 @@ export default function TaskView() {
               <input type="date" value={dateTo} min={dateFrom} onChange={(e) => { setDateTo(e.target.value); setPage(1); }}
                 className="px-3 py-1.5 rounded-xl bg-white dark:bg-zinc-800 border-2 border-zinc-100 dark:border-zinc-700 text-sm font-bold outline-none focus:border-brand text-zinc-900 dark:text-white" />
             </div>
+            <button onClick={exportLogs} disabled={exportingLogs || total === 0}
+              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-brand text-white text-sm font-black disabled:opacity-50 active:scale-95 transition">
+              {exportingLogs ? <Loader2 size={15} className="animate-spin" /> : <Download size={15} />}{ar ? 'تنزيل Excel' : 'Export Excel'}
+            </button>
           </div>
         </div>
         <div className="overflow-x-auto">
