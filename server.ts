@@ -935,6 +935,9 @@ async function initDb() {
   );
   CREATE INDEX IF NOT EXISTS idx_activity_logs_agent ON activity_logs(agent_id, created_at DESC);
   CREATE INDEX IF NOT EXISTS idx_activity_logs_created ON activity_logs(created_at DESC);
+  -- Tiny partial index (only release/transfer credit rows) so the release-abuse
+  -- insight stays index-backed as activity_logs grows.
+  CREATE INDEX IF NOT EXISTS idx_activity_logs_release ON activity_logs(agent_id, created_at DESC) WHERE status IN ('Released','Transferred');
   -- Customizable dropdown lists for the Task page (edited in its Config section).
   CREATE TABLE IF NOT EXISTS tech_activity (
     id SERIAL PRIMARY KEY,
@@ -945,7 +948,8 @@ async function initDb() {
     id SERIAL PRIMARY KEY,
     name TEXT NOT NULL UNIQUE,
     counts_time BOOLEAN DEFAULT false,
-    sort_order INTEGER DEFAULT 0
+    sort_order INTEGER DEFAULT 0,
+    system BOOLEAN DEFAULT false   -- system statuses (Released/Transferred) count time but are hidden from the manual-log dropdown
   );
 
   -- Assigned Tasks: a Manager assigns a task to a Technical Back Office employee;
@@ -1278,6 +1282,14 @@ try {
   const taskStatuses: Array<[string, boolean]> = [["Open", false], ["In Progress", false], ["Completed", true]];
   for (let i = 0; i < taskStatuses.length; i++) {
     await db.query("INSERT INTO cc_status (name, counts_time, sort_order) VALUES ($1, $2, $3) ON CONFLICT (name) DO NOTHING", [taskStatuses[i][0], taskStatuses[i][1], i]);
+  }
+  // System statuses for ticket work that didn't finish: the holder's time is still
+  // credited (counts_time = true) but these are hidden from the manual-log dropdown.
+  // Ensure the column exists first (existing DBs won't get it from CREATE TABLE).
+  try { await db.exec("ALTER TABLE cc_status ADD COLUMN system BOOLEAN DEFAULT false"); } catch (e) {}
+  const systemStatuses: Array<[string, number]> = [["Released", 90], ["Transferred", 91]];
+  for (const [name, sort] of systemStatuses) {
+    await db.query("INSERT INTO cc_status (name, counts_time, sort_order, system) VALUES ($1, true, $2, true) ON CONFLICT (name) DO UPDATE SET counts_time = true, system = true", [name, sort]);
   }
 
   // Author for automated chat messages. Inactive + unusable password: it can never
@@ -3326,7 +3338,7 @@ async function startServer() {
   // Dropdown lists for the form (activities + statuses).
   app.get("/api/task-config", authenticate, authorize(TASK_ROLES), async (_req, res) => {
     const activities = await db.all("SELECT id, name FROM tech_activity ORDER BY sort_order, name");
-    const statuses = await db.all("SELECT id, name, counts_time FROM cc_status ORDER BY sort_order, id");
+    const statuses = await db.all("SELECT id, name, counts_time FROM cc_status WHERE COALESCE(system, false) = false ORDER BY sort_order, id");
     res.json({ activities, statuses });
   });
 
@@ -4425,6 +4437,34 @@ async function startServer() {
     if (ticketType === 'busy_branch') return data?.action === 'OPEN' ? 'Open Branch' : 'Busy Branch';
     return data?.action === 'UNHIDE' ? 'Unhide Item' : 'Hide Item';
   };
+  // Activity label for a ticket type when we don't have the request payload.
+  const ticketTypeLabel = (tt: string): string =>
+    tt === 'chat' ? 'Invoice Chat' : tt === 'busy_branch' ? 'Busy Branch' : 'Hide/Unhide';
+  // Credit the current holder's elapsed time on a ticket they worked but didn't
+  // finish (released to the pool, or transferred to another agent). Flips the
+  // assignment atomically, records its duration, and writes an activity_logs row
+  // (counts_time status) so the time counts in the agent's working hours.
+  const creditTicketWork = async (
+    assignmentId: number,
+    dbStatus: 'released' | 'transferred',
+    activityStatus: 'Released' | 'Transferred'
+  ): Promise<boolean> => {
+    const won = await db.query(`
+      UPDATE ticket_assignments
+      SET status = $2, done_at = CURRENT_TIMESTAMP,
+          duration_seconds = GREATEST(1, EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - assigned_at))::int)
+      WHERE id = $1 AND status = 'in_progress'
+      RETURNING duration_seconds, brand_id, ticket_type, ticket_id, assigned_to`, [assignmentId, dbStatus]);
+    const row = won.rows?.[0];
+    if (!row) return false;
+    const holder = await db.get("SELECT username FROM users WHERE id = $1", [row.assigned_to]) as any;
+    await db.query(`
+      INSERT INTO activity_logs (log_type, department, activity_type, status, duration_seconds, brand_id, notes, agent_id, agent_name)
+      VALUES ('technical','Technical',$1,$2,$3,$4,$5,$6,$7)`,
+      [ticketTypeLabel(row.ticket_type), activityStatus, Math.max(1, Number(row.duration_seconds) || 1),
+       row.brand_id || null, `${activityStatus} · ticket #${row.ticket_id}`, row.assigned_to, holder?.username || 'Unknown']);
+    return true;
+  };
   // Resolve a ticket's brand/branch + whether it's still open (claimable).
   const getTicketMeta = async (ticketType: string, ticketId: number) => {
     if (ticketType === 'chat') {
@@ -4594,7 +4634,10 @@ async function startServer() {
       if (!target || !TICKET_WORK_ROLES.includes(target.role)) return res.status(400).json({ error: "Target is not a technical agent" });
       const targetBusy = await db.get("SELECT 1 FROM ticket_assignments WHERE assigned_to = $1 AND status = 'in_progress' LIMIT 1", [to_agent_id]);
       if (targetBusy) return res.status(409).json({ error: "That agent already has an active ticket" });
-      await db.query("UPDATE ticket_assignments SET status = 'transferred', done_at = CURRENT_TIMESTAMP WHERE id = $1", [a.id]);
+      // Credit the transferring agent's time-in-progress before handing off. If the
+      // hold is already gone (race), don't create a dangling new assignment.
+      const moved = await creditTicketWork(a.id, 'transferred', 'Transferred');
+      if (!moved) return res.status(409).json({ error: "Ticket is no longer active" });
       await db.query(`INSERT INTO ticket_assignments (ticket_type, ticket_id, assigned_to, brand_id, branch_id) VALUES ($1, $2, $3, $4, $5)`,
         [ticket_type, ticket_id, to_agent_id, a.brand_id, a.branch_id]);
       broadcast({ type: "TICKETS_UPDATED" });
@@ -4616,7 +4659,8 @@ async function startServer() {
       const a = await db.get("SELECT id, assigned_to FROM ticket_assignments WHERE ticket_type = $1 AND ticket_id = $2 AND status = 'in_progress'", [ticket_type, ticket_id]) as any;
       if (!a) return res.status(404).json({ error: "No active assignment" });
       if (a.assigned_to !== user.id && !isAdmin) return res.status(403).json({ error: "Only the holder or a supervisor can release" });
-      await db.query("UPDATE ticket_assignments SET status = 'released', done_at = CURRENT_TIMESTAMP WHERE id = $1", [a.id]);
+      // Credit the holder's time-in-progress even though the ticket wasn't finished.
+      await creditTicketWork(a.id, 'released', 'Released');
       broadcast({ type: "TICKETS_UPDATED" });
       res.json({ success: true });
     } catch (e) {
@@ -9554,6 +9598,63 @@ async function startServer() {
       LIMIT 300
     `, f.params) as any[];
     res.json(rows);
+  });
+
+  // ===== Ticket release / transfer insights (spot agents gaming the system) =====
+  const releaseDateFilter = (q: any, col: string, params: any[]): string => {
+    const d = `(${col} AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kuwait')::date`;
+    const today = "(CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kuwait')::date";
+    const conds: string[] = [];
+    if (q.startDate) { params.push(q.startDate); conds.push(`${d} >= $${params.length}`); }
+    if (q.endDate) { params.push(q.endDate); conds.push(`${d} <= $${params.length}`); }
+    if (!q.startDate && !q.endDate) {
+      if (q.period === 'today') conds.push(`${d} = ${today}`);
+      else if (q.period === 'week') conds.push(`${d} >= ${today} - INTERVAL '7 days'`);
+      else if (q.period === 'month') conds.push(`${d} >= ${today} - INTERVAL '30 days'`);
+    }
+    return conds.length ? ' AND ' + conds.join(' AND ') : '';
+  };
+
+  // Per-agent release/transfer counts + time held. Based on activity_logs, whose
+  // 'Released'/'Transferred' rows are written ONLY by an agent's manual
+  // release/transfer (creditTicketWork) — system auto-releases never appear here,
+  // so the counts reflect real agent behaviour. Many releases with short holds =
+  // an agent repeatedly picking then dropping tickets (possible time-gaming).
+  app.get("/api/reports/ticket-releases", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    try {
+      const params: any[] = [];
+      const df = releaseDateFilter(req.query, 'al.created_at', params);
+      const rows = await db.all(`
+        SELECT u.id AS user_id, u.username,
+          COUNT(*) FILTER (WHERE al.status='Released')::int AS releases,
+          COUNT(*) FILTER (WHERE al.status='Transferred')::int AS transfers,
+          COALESCE(ROUND(AVG(al.duration_seconds) FILTER (WHERE al.status='Released')),0)::int AS avg_release_seconds,
+          COALESCE(SUM(al.duration_seconds),0)::bigint AS total_seconds
+        FROM activity_logs al
+        JOIN users u ON u.id = al.agent_id
+        WHERE al.status IN ('Released','Transferred') ${df}
+        GROUP BY u.id, u.username
+        ORDER BY releases DESC, transfers DESC`, params);
+      res.json(rows);
+    } catch (e) { console.error("ticket-releases error:", e); res.status(500).json({ error: "Failed to load release insights" }); }
+  });
+
+  // Drill-down: each release/transfer one agent made (label, brand, time held, when).
+  app.get("/api/reports/ticket-release-log", authenticate, authorize(["Manager", "Super Visor", "Operation Manager"]), async (req, res) => {
+    try {
+      const agentId = Number(req.query.agent_id);
+      if (!Number.isFinite(agentId)) return res.status(400).json({ error: "agent_id required" });
+      const params: any[] = [agentId];
+      const df = releaseDateFilter(req.query, 'al.created_at', params);
+      const rows = await db.all(`
+        SELECT al.id, al.activity_type AS ticket_label, LOWER(al.status) AS status,
+          al.duration_seconds, al.created_at AS done_at, b.name AS brand_name
+        FROM activity_logs al
+        LEFT JOIN brands b ON b.id = al.brand_id
+        WHERE al.agent_id = $1 AND al.status IN ('Released','Transferred') ${df}
+        ORDER BY al.created_at DESC LIMIT 300`, params);
+      res.json(rows);
+    } catch (e) { console.error("ticket-release-log error:", e); res.status(500).json({ error: "Failed to load release log" }); }
   });
 
   app.get("/api/export", authenticate, async (req, res) => {

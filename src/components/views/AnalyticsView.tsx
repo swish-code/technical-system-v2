@@ -197,6 +197,11 @@ export default function AnalyticsView() {
   const [expandedChat, setExpandedChat] = useState<{ userId: number, type: 'replies' | 'dismissed' } | null>(null);
   const [drillRows, setDrillRows] = useState<any[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
+  // Release / transfer insights (spot agents picking then dropping tickets).
+  const [releaseRows, setReleaseRows] = useState<any[]>([]);
+  const [releaseDrill, setReleaseDrill] = useState<number | null>(null);
+  const [releaseDrillRows, setReleaseDrillRows] = useState<any[]>([]);
+  const [releaseDrillLoading, setReleaseDrillLoading] = useState(false);
   const [savingTarget, setSavingTarget] = useState(false);
   const isManagerRole = ['Manager', 'Super Visor', 'Operation Manager'].includes(user?.role_name || '');
   
@@ -275,6 +280,10 @@ export default function AnalyticsView() {
       if (chatRes.ok) { setChatPerf(await chatRes.json()); setExpandedChat(null); }
       if (teamBrandRes.ok) setTeamByBrand(await teamBrandRes.json());
       if (chatBrandRes.ok) setChatByBrand(await chatBrandRes.json());
+      if (isManagerRole) {
+        try { const relRes = await fetchWithAuth(`${API_URL}/reports/ticket-releases?${queryParams.toString()}`); setReleaseRows(relRes.ok ? await relRes.json() : []); } catch { setReleaseRows([]); }
+        setReleaseDrill(null);
+      }
       if (chatTargetRes.ok) {
         const d = await chatTargetRes.json();
         setChatTarget(d?.reply_min ?? null);
@@ -376,6 +385,31 @@ export default function AnalyticsView() {
     } catch { setDrillRows([]); } finally { setDrillLoading(false); }
   };
 
+  // Drill-down: every release/transfer one agent made in the current scope.
+  const openReleaseDrill = async (userId: number) => {
+    if (releaseDrill === userId) { setReleaseDrill(null); return; }
+    setReleaseDrill(userId);
+    setReleaseDrillRows([]);
+    setReleaseDrillLoading(true);
+    try {
+      const qp = new URLSearchParams();
+      if (filters.branch !== 'all') qp.append('branch_id', filters.branch);
+      if (filters.brand !== 'all') qp.append('brand_id', filters.brand);
+      if (filters.startDate) qp.append('startDate', filters.startDate);
+      if (filters.endDate) qp.append('endDate', filters.endDate);
+      qp.append('agent_id', String(userId));
+      const res = await fetchWithAuth(`${API_URL}/reports/ticket-release-log?${qp.toString()}`);
+      setReleaseDrillRows(res.ok ? await res.json() : []);
+    } catch { setReleaseDrillRows([]); } finally { setReleaseDrillLoading(false); }
+  };
+
+  const fmtSecs = (s: number) => {
+    const n = Math.max(0, Math.round(Number(s) || 0));
+    if (n < 60) return `${n}s`;
+    const m = Math.floor(n / 60), sec = n % 60;
+    if (m < 60) return sec ? `${m}m ${sec}s` : `${m}m`;
+    return `${Math.floor(m / 60)}h ${m % 60}m`;
+  };
   const saveChatTarget = async () => {
     setSavingChatTarget(true);
     const res = await fetchWithAuth(`${API_URL}/reports/chat-target`, {
@@ -940,26 +974,30 @@ export default function AnalyticsView() {
                               ) : drillRows.length === 0 ? (
                                 <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد بيانات' : 'No data'}</p>
                               ) : (
-                                <div className="space-y-1.5 pt-3 max-h-72 overflow-y-auto">
+                                <div className="space-y-1.5 pt-3 max-h-96 overflow-y-auto">
                                   {dismissOpen ? drillRows.map((l, j) => (
-                                    <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
-                                      <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
-                                      <span className="text-zinc-400">·</span>
-                                      <span className="text-zinc-500">{l.sender_username}:</span>
-                                      <span className="text-zinc-600 dark:text-zinc-300 truncate max-w-[260px]">{l.comment || (l.has_image ? '📷' : '')}</span>
-                                      {l.resolve_reason && <span className="px-2 py-0.5 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 truncate max-w-[180px]">{l.resolve_reason}</span>}
-                                      <span className="ml-auto text-zinc-400">{formatDate(l.resolved_at)}</span>
+                                    <div key={j} className="text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                                        <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                                        <span className="text-zinc-400">·</span>
+                                        <span className="text-zinc-500">{l.sender_username}</span>
+                                        <span className="ml-auto text-zinc-400">{formatDate(l.resolved_at)}</span>
+                                      </div>
+                                      <p className="text-zinc-600 dark:text-zinc-300 whitespace-pre-wrap break-words leading-relaxed">{l.comment || (l.has_image ? '📷' : '—')}</p>
+                                      {l.resolve_reason && <p className="mt-1 text-zinc-500 whitespace-pre-wrap break-words"><span className="font-bold">{lang === 'ar' ? 'السبب' : 'Reason'}: </span>{l.resolve_reason}</p>}
                                     </div>
                                   )) : drillRows.map((l, j) => (
-                                    <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
-                                      <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
-                                      <span className="text-zinc-400">·</span>
-                                      <span className="text-zinc-500 truncate max-w-[260px]">{l.original_comment || (l.original_has_image ? '📷' : '')} → {l.reply_comment || (l.reply_has_image ? '📷' : '')}</span>
-                                      <span className="ml-auto text-zinc-400">{formatDate(l.reply_at)}</span>
-                                      <span className={cn("px-2 py-0.5 rounded-md font-black tabular-nums",
-                                        chatTarget != null && l.response_minutes > chatTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
-                                        {l.response_minutes} {lang === 'ar' ? 'د' : 'min'}
-                                      </span>
+                                    <div key={j} className="text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1.5">
+                                        <span className="font-black text-zinc-700 dark:text-zinc-200">{l.branch_name}</span>
+                                        <span className="ml-auto text-zinc-400">{formatDate(l.reply_at)}</span>
+                                        <span className={cn("px-2 py-0.5 rounded-md font-black tabular-nums",
+                                          chatTarget != null && l.response_minutes > chatTarget ? "bg-red-50 text-red-600 dark:bg-red-900/20" : "bg-emerald-50 text-emerald-600 dark:bg-emerald-900/20")}>
+                                          {l.response_minutes} {lang === 'ar' ? 'د' : 'min'}
+                                        </span>
+                                      </div>
+                                      <p className="text-zinc-600 dark:text-zinc-300 whitespace-pre-wrap break-words leading-relaxed"><span className="text-zinc-400 font-bold">{lang === 'ar' ? 'الرسالة' : 'Message'}: </span>{l.original_comment || (l.original_has_image ? '📷' : '—')}</p>
+                                      <p className="mt-1 text-zinc-800 dark:text-zinc-100 whitespace-pre-wrap break-words leading-relaxed"><span className="text-brand font-bold">{lang === 'ar' ? 'الرد' : 'Reply'}: </span>{l.reply_comment || (l.reply_has_image ? '📷' : '—')}</p>
                                     </div>
                                   ))}
                                 </div>
@@ -1053,6 +1091,68 @@ export default function AnalyticsView() {
               </tbody>
             </table>
           </div>
+
+          {/* Release / Transfer insights — spot agents picking then dropping tickets */}
+          {releaseRows.length > 0 && (
+            <div className="overflow-x-auto rounded-[2rem] border border-zinc-100 dark:border-zinc-800 bg-white dark:bg-zinc-900/50">
+              <div className="px-6 pt-5 pb-3">
+                <h3 className="text-xl font-display font-black text-zinc-900 dark:text-white tracking-tight">{lang === 'ar' ? 'التنازل عن التذاكر وتحويلها' : 'Ticket Releases & Transfers'}</h3>
+                <p className="text-[10px] md:text-xs text-zinc-500 font-bold uppercase tracking-widest mt-1">{lang === 'ar' ? 'من يسحب التذاكر ثم يتركها — كثرة التنازل مع وقت قصير قد تعني تلاعباً' : 'Who picks tickets then drops them — many releases with short holds may signal gaming'}</p>
+              </div>
+              <table className="w-full text-left border-collapse min-w-[720px]">
+                <thead>
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/50 border-b border-zinc-100 dark:border-zinc-800">
+                    <th className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'الموظف' : 'Employee'}</th>
+                    <th className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'تنازل' : 'Releases'}</th>
+                    <th className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'تحويل' : 'Transfers'}</th>
+                    <th className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'متوسط وقت الاحتجاز' : 'Avg hold'}</th>
+                    <th className="px-4 md:px-6 py-3 text-[10px] font-black text-zinc-400 uppercase tracking-widest">{lang === 'ar' ? 'إجمالي الوقت' : 'Total time'}</th>
+                    <th className="px-4 md:px-6 py-3"></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-zinc-50 dark:divide-zinc-800">
+                  {releaseRows.map((r) => (
+                    <React.Fragment key={r.user_id}>
+                      <tr className="hover:bg-zinc-50/50 dark:hover:bg-zinc-800/20">
+                        <td className="px-4 md:px-6 py-4 font-black text-zinc-900 dark:text-white">{r.username}</td>
+                        <td className="px-4 md:px-6 py-4"><span className={cn("px-2.5 py-1 rounded-lg text-xs font-black tabular-nums", r.releases >= 10 ? "bg-red-50 text-red-600 dark:bg-red-900/20" : r.releases >= 5 ? "bg-amber-50 text-amber-600 dark:bg-amber-900/20" : "text-zinc-700 dark:text-zinc-300")}>{r.releases}</span></td>
+                        <td className="px-4 md:px-6 py-4 font-bold text-zinc-600 dark:text-zinc-300 tabular-nums">{r.transfers}</td>
+                        <td className="px-4 md:px-6 py-4 font-bold tabular-nums"><span className={cn(r.releases > 0 && r.avg_release_seconds < 30 ? "text-red-500" : "text-zinc-600 dark:text-zinc-300")}>{r.releases > 0 ? fmtSecs(r.avg_release_seconds) : '—'}</span></td>
+                        <td className="px-4 md:px-6 py-4 font-bold text-zinc-600 dark:text-zinc-300 tabular-nums">{fmtSecs(r.total_seconds)}</td>
+                        <td className="px-4 md:px-6 py-4 text-right">
+                          <button onClick={() => openReleaseDrill(r.user_id)} className="text-xs font-black text-brand hover:underline">{releaseDrill === r.user_id ? (lang === 'ar' ? 'إخفاء' : 'Hide') : (lang === 'ar' ? 'تفاصيل' : 'Details')}</button>
+                        </td>
+                      </tr>
+                      {releaseDrill === r.user_id && (
+                        <tr>
+                          <td colSpan={6} className="px-4 md:px-6 pb-5 bg-zinc-50/40 dark:bg-zinc-800/20">
+                            {releaseDrillLoading ? (
+                              <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'جارٍ التحميل...' : 'Loading...'}</p>
+                            ) : releaseDrillRows.length === 0 ? (
+                              <p className="py-4 text-center text-zinc-400 text-xs font-bold uppercase tracking-widest">{lang === 'ar' ? 'لا توجد بيانات' : 'No data'}</p>
+                            ) : (
+                              <div className="space-y-1.5 pt-3 max-h-72 overflow-y-auto">
+                                {releaseDrillRows.map((l, j) => (
+                                  <div key={j} className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs bg-white dark:bg-zinc-900 rounded-xl px-3 py-2 border border-zinc-100 dark:border-zinc-800">
+                                    <span className={cn("px-2 py-0.5 rounded-md font-black", l.status === 'released' ? "bg-amber-50 text-amber-600 dark:bg-amber-900/20" : "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20")}>{l.status === 'released' ? (lang === 'ar' ? 'تنازل' : 'Released') : (lang === 'ar' ? 'تحويل' : 'Transferred')}</span>
+                                    <span className="font-black text-zinc-700 dark:text-zinc-200">{l.ticket_label}</span>
+                                    {l.brand_name && <><span className="text-zinc-400">·</span><span className="text-zinc-500">{l.brand_name}</span></>}
+                                    <span className="text-zinc-400">·</span>
+                                    <span className="text-zinc-600 dark:text-zinc-300">{lang === 'ar' ? 'مدة الاحتجاز' : 'held'}: {fmtSecs(l.duration_seconds)}</span>
+                                    <span className="ml-auto text-zinc-400">{formatDate(l.done_at)}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
 
